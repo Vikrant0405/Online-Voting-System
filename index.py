@@ -641,15 +641,15 @@ class VotingAssistant:
                 for row in rows:
                     self.users_table.insert("", END, values=row)
 
-        def load_all_users(self):
-            self.users_table.delete(*self.users_table.get_children())
-            if self.conn.is_connected():
-                self.cursr.execute("SELECT user_id, username, pwd, adharId, voterID, gender, role FROM users")
-                rows = self.cursr.fetchall()
-                for row in rows:
-                    self.users_table.insert("", END, values=row)
-    except:
-        messagebox.showerror("VA", "Error in add new user or see all user")
+    #     def load_all_users(self):
+    #         self.users_table.delete(*self.users_table.get_children())
+    #         if self.conn.is_connected():
+    #             self.cursr.execute("SELECT user_id, username, pwd, adharId, voterID, gender, role FROM users")
+    #             rows = self.cursr.fetchall()
+    #             for row in rows:
+    #                 self.users_table.insert("", END, values=row)
+    # except:
+    #     messagebox.showerror("VA", "Error in add new user or see all user")
 
   
 
