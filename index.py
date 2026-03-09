@@ -640,19 +640,392 @@ class VotingAssistant:
                 rows = self.cursr.fetchall()
                 for row in rows:
                     self.users_table.insert("", END, values=row)
+                    
+                def load_all_users(self):
+            self.users_table.delete(*self.users_table.get_children())
+            if self.conn.is_connected():
+                self.cursr.execute("SELECT user_id, username, pwd, adharId, voterID, gender, role FROM users")
+                rows = self.cursr.fetchall()
+                for row in rows:
+                    self.users_table.insert("", END, values=row)
+    except:
+        messagebox.showerror("VA", "Error in add new user or see all user")
 
-    #     def load_all_users(self):
-    #         self.users_table.delete(*self.users_table.get_children())
-    #         if self.conn.is_connected():
-    #             self.cursr.execute("SELECT user_id, username, pwd, adharId, voterID, gender, role FROM users")
-    #             rows = self.cursr.fetchall()
-    #             for row in rows:
-    #                 self.users_table.insert("", END, values=row)
-    # except:
-    #     messagebox.showerror("VA", "Error in add new user or see all user")
+    # add new candidate and show table
+    try:
+        def register_candidate(self):
 
-  
+            name = self.candidate_name.get()
+            age = self.candidate_age.get()
+            gender = self.candidate_gender.get()
+            party = self.candidate_party.get()
+            symbol = self.candidate_symbol.get()
+            # constituency = self.candidate_constituency.get()
 
+            if not re.fullmatch(r"[A-Za-z ]{3,25}", name):
+                messagebox.showerror("Error", "Invalid Candidate Name (3–25 letters only)")
+                return
+
+
+            if not re.fullmatch(r"\d{1,2}", age) or not (18 <= int(age) <= 99):
+                messagebox.showerror("Error", "Invalid Age (must be between 18 and 99)")
+                return
+
+
+            if gender not in ["Male", "Female", "Other"]:
+                messagebox.showerror("Error", "Select a valid gender")
+                return
+
+
+            if not re.fullmatch(r"[A-Za-z0-9 .-]{3,30}", party):
+                messagebox.showerror("Error", "Invalid Party Name (3–30 characters)")
+                return
+
+
+            if not re.fullmatch(r"[A-Za-z0-9 _-]{2,20}", symbol):
+                messagebox.showerror("Error", "Invalid Party Symbol (2–20 characters)")
+                return
+
+
+            if not name or not age or not party or not symbol:
+                messagebox.showerror("Error", "All fields are required")
+                return
+
+            try:
+                query = "INSERT INTO candidates (name, age, gender, party_name, symbol) VALUES (%s, %s, %s, %s, %s)"
+                self.cursr.execute(query, (name, int(age), gender, party, symbol,))
+                self.conn.commit()
+                messagebox.showinfo("Success", "Candidate registered successfully.")
+                self.add_candidate.destroy()
+            except mysql.connector.Error as err:
+                messagebox.showerror("Error", f"Database Error: {err}")
+
+        def add_candidate_window(self):
+            # self.center_frame.destroy()
+            self.center_frame = Frame(self.root)
+            self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+            self.add_candidate = Toplevel(self.center_frame)
+            self.add_candidate.title("Add New Candidate")
+            self.add_candidate.geometry("500x700")
+            self.add_candidate.config(bg="#1E1F22")
+
+            Label(self.add_candidate, text="Register New Candidate", font=("Georgia", 20),
+                  bg="#1E1F22", fg="white").pack(pady=10)
+
+            # Candidate Name
+            Label(self.add_candidate, text="Candidate Name", font=("Arial", 18),
+                  bg="#1E1F22", fg="white").pack(pady=5)
+            self.candidate_name = Entry(self.add_candidate, font=("Arial", 18), width=20)
+            self.candidate_name.pack(pady=5)
+
+            # Age
+            Label(self.add_candidate, text="Age", font=("Arial", 18),
+                  bg="#1E1F22", fg="white").pack(pady=5)
+            self.candidate_age = Entry(self.add_candidate, font=("Arial", 18), width=20)
+            self.candidate_age.pack(pady=5)
+
+            # Gender
+            Label(self.add_candidate, text="Gender", font=("Arial", 18),
+                  bg="#1E1F22", fg="white").pack(pady=5)
+            self.candidate_gender = StringVar()
+            self.candidate_gender.set("Select Gender")
+            gender_options = ["Male", "Female", "Other"]
+            OptionMenu(self.add_candidate, self.candidate_gender, *gender_options).pack(pady=5)
+
+            # Party Name
+            Label(self.add_candidate, text="Party Name", font=("Arial", 18),
+                  bg="#1E1F22", fg="white").pack(pady=5)
+            self.candidate_party = Entry(self.add_candidate, font=("Arial", 18), width=20)
+            self.candidate_party.pack(pady=5)
+
+            # Symbol
+            Label(self.add_candidate, text="Party Symbol", font=("Arial", 18),
+                  bg="#1E1F22", fg="white").pack(pady=5)
+            self.candidate_symbol = Entry(self.add_candidate, font=("Arial", 18), width=20)
+            self.candidate_symbol.pack(pady=5)
+
+            # Submit
+            Button(self.add_candidate, text="Register Candidate", font=("Arial", 18),
+                   bg='#1E1F22', fg="#BEB09D", command=self.register_candidate).pack(pady=10)
+
+            Button(self.add_candidate, text=" Back", font=("Arial", 18),
+                   bg='#1E1F22', fg="#BEB09D", command=self.add_candidate.destroy).pack(pady=10)
+
+        def show_candidates(self):
+            self.clear_screen()
+            self.center_frame.destroy()
+
+            self.center_frame = Frame(self.root)
+            self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+            self.candidate_table_frame = Frame(
+                self.center_frame, bg="#26282E",
+                height=600, width=1100,
+                borderwidth=1, relief="solid",
+                highlightthickness=2, highlightbackground="gray"
+            )
+            self.candidate_table_frame.pack(fill="both", expand=True)
+            self.candidate_table_frame.pack_propagate(False)
+
+            title_label = Label(self.candidate_table_frame, text="CANDIDATES", font="georgia 40", bg="#1E1F22",
+                                fg="gray")
+            title_label.pack(padx=20, pady=20)
+
+            search_frame = Frame(self.candidate_table_frame, bg="#26282E")
+            search_frame.pack(pady=5)
+
+            self.search_var = StringVar()
+            search_entry = Entry(search_frame, textvariable=self.search_var, font=("Arial", 14), width=30)
+            search_entry.pack(side=LEFT, padx=10)
+
+            search_btn = Button(search_frame, text="Search", font=("Arial", 12), bg="#1E1F22", fg="#BEB09D",
+                                command=self.search_candidate)
+            search_btn.pack(side=LEFT, padx=5)
+
+            reset_btn = Button(search_frame, text="Reset", font=("Arial", 12), bg="#1E1F22", fg="#BEB09D",
+                               command=self.load_all_candidate)
+            reset_btn.pack(side=LEFT, padx=5)
+            style = Style()
+            style.configure("Treeview", font=("Arial", 14),rowheight=25)
+            style.configure("Treeview.Heading", font=("Arial", 16, "bold"))
+
+            self.candidate_table = Treeview(self.candidate_table_frame)
+            self.candidate_table['columns'] = ('candidate_id', 'name', 'age', 'gender', 'party_name', 'symbol')
+
+            for col in self.candidate_table['columns']:
+                self.candidate_table.column(col, anchor="center", width=160)
+                self.candidate_table.heading(col, text=col)
+
+            self.candidate_table.config(show="headings")
+            self.candidate_table.pack(fill="both", expand=True, padx=30, pady=30)
+
+            scrollbar = Scrollbar(self.candidate_table_frame, orient="vertical", command=self.candidate_table.yview)
+            scrollbar.pack(side=RIGHT, fill=Y)
+            self.candidate_table.configure(yscrollcommand=scrollbar.set)
+
+            if self.conn.is_connected():
+                self.cursr.execute("SELECT candidate_id, name, age, gender, party_name, symbol FROM candidates")
+                candidates = self.cursr.fetchall()
+                for cand in candidates:
+                    self.candidate_table.insert("", END, values=cand)
+
+            Button(self.candidate_table_frame, text="Back", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
+                   borderwidth=1, relief="solid", command=self.admin_window_frame).pack(pady=20)
+
+        def search_candidate(self):
+            keyword = self.search_var.get().lower()
+            if not keyword:
+                self.load_all_candidate()
+                return
+
+            self.candidate_table.delete(*self.candidate_table.get_children())
+            if self.conn.is_connected():
+                query = """SELECT candidate_id, name, age, gender, party_name, symbol FROM candidates 
+                           WHERE LOWER(name) LIKE %s OR LOWER(party_name) LIKE %s OR LOWER(symbol) LIKE %s"""
+                search_term = f"%{keyword}%"
+                self.cursr.execute(query, (search_term, search_term, search_term))
+                rows = self.cursr.fetchall()
+                for row in rows:
+                    self.candidate_table.insert("", END, values=row)
+
+        def load_all_candidate(self):
+            self.candidate_table.delete(*self.candidate_table.get_children())
+            if self.conn.is_connected():
+                self.cursr.execute("SELECT candidate_id, name, age, gender, party_name, symbol FROM candidates")
+                candidates = self.cursr.fetchall()
+
+                for cand in candidates:
+                    self.candidate_table.insert("", END, values=cand)
+    except:
+        messagebox.showerror("VA", "Error in add new candidate or see all user")
+
+    def show_graph(self):
+        self.clear_screen()
+
+        try:
+            if self.center_frame:
+                self.center_frame.destroy()
+
+            self.center_frame = Frame(self.root)
+            self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+            self.show_result_window = Frame(
+                self.center_frame,
+                bg="#26282E",
+                height=800,
+                width=1000,
+                borderwidth=1,
+                relief="solid",
+                highlightthickness=2,
+                highlightbackground="gray"
+            )
+            self.show_result_window.pack(fill="both", expand=True)
+
+            Label(
+                self.show_result_window,
+                text="Voting Results - Bar & Pie Chart",
+                font=("Arial", 18, "bold"),
+                bg="#26282E",
+                fg="white"
+            ).pack(pady=10)
+
+            chart_frame = Frame(self.show_result_window, bg="white")
+            chart_frame.pack(padx=20, pady=10, fill="both", expand=True)
+
+            self.display_combined_charts(chart_frame)
+
+            Button(
+                self.show_result_window,
+                text="Back",
+                font=("Arial", 16),
+                bg='#1E1F22',
+                fg="#BEB09D",
+                width=15,
+                borderwidth=1,
+                relief="solid",
+                command=self.admin_window_frame
+            ).pack(side="bottom", pady=12)
+
+        except Exception as e:
+            messagebox.showerror("VA", f"Error in graph window: {e}")
+
+    def get_vote_data(self):
+        self.cursr.execute("SELECT name, voter FROM candidates")
+        result = self.cursr.fetchall()
+
+        self.cursr.execute("SELECT gender, COUNT(*) FROM users WHERE is_voted='yes' GROUP BY gender")
+        result1 = self.cursr.fetchall()
+
+        self.cursr.execute("SELECT Is_voted, COUNT(*) FROM users GROUP BY Is_voted")
+        result2 = self.cursr.fetchall()
+
+        names = [row[0] for row in result]
+        votes = [row[1] for row in result]
+
+        gender = [row[0] for row in result1]
+        count = [row[1] for row in result1]
+
+        return names, votes, gender, count, result2
+
+    
+    def display_combined_charts(self, parent):
+        try:
+            names, votes, gender, count, result2 = self.get_vote_data()
+
+            if not names:
+                Label(parent, text="❌ No candidates found!", font=("Arial", 18, "bold"),
+                      fg="red", bg="white").pack(pady=60)
+                return
+
+            total_votes = sum(votes)
+            if total_votes == 0:
+                Label(parent, text="❌ No votes have been cast yet!", font=("Arial", 18, "bold"),
+                      fg="red", bg="white").pack(pady=60)
+                return
+
+            fig, axes = plt.subplots(2, 2, figsize=(9, 6))
+            fig.subplots_adjust(wspace=0.5, hspace=0.5)
+
+            voted_count = 0
+            not_voted_count = 0
+
+            for row in result2:
+                if row[0] == 1:
+                    voted_count = row[1]
+                elif row[0] == 0:
+                    not_voted_count = row[1]
+
+            ax1, ax2 = axes[0]
+            ax3, ax4 = axes[1]
+
+            ax1.bar(names, votes)
+            ax1.set_title("Voters Graph")
+            ax1.set_xlabel("Candidates")
+            ax1.set_ylabel("Votes")
+            ax1.tick_params(axis='x', rotation=30)
+
+            ax3.barh(gender, count)
+            ax3.set_title("Total Voted : Male vs Female")
+            ax3.set_xlabel("Number of Votes")
+
+            ax2.pie(votes, labels=names, autopct="%1.1f%%", startangle=140)
+            ax2.set_title("Voting Chart")
+            ax2.axis('equal')
+
+            if voted_count + not_voted_count > 0:
+                ax4.pie([voted_count, not_voted_count],
+                        labels=["Voted", "Not Voted"],
+                        autopct="%1.1f%%", startangle=140)
+            else:
+                ax4.text(0.5, 0.5, "No users yet", ha="center", va="center")
+
+            ax4.set_title("Total Voting Status")
+            ax4.axis('equal')
+
+            canvas = FigureCanvasTkAgg(fig, master=parent)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        except Exception as e:
+            messagebox.showerror("VA", f"Graph Error: {e}")
+
+    def show_result(self, ):
+        self.clear_screen()
+        self.center_frame.destroy()
+
+        self.center_frame = Frame(self.root)
+        self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.show_result_win = Frame(
+            self.center_frame,
+            bg="#26282E",
+            height=700,
+            width=800,
+            borderwidth=1,
+            relief="solid",
+            highlightthickness=2,
+            highlightbackground="gray"
+        )
+        self.show_result_win.pack()
+        if self.conn.is_connected():
+            self.cursr.execute("SELECT name, voter FROM candidates ORDER BY voter DESC")
+            data = self.cursr.fetchall()
+            names = [row[0] for row in data]
+            votes = [row[1] for row in data]
+            print(names)
+            print(votes)
+
+
+        top_vote = votes[0]
+
+        if top_vote == 0:
+            text = "⚠️ No votes have been cast yet. Results will appear after voting starts."
+        else:
+            winners = [name for name, v in zip(names, votes) if v == top_vote]
+
+            if len(winners) > 1:
+                text = f"🤝 It's a tie between {', '.join(winners)} with {top_vote} votes each!"
+            else:
+                text = f"🏆 Winner: {winners[0]} with {top_vote} votes!"
+
+        Label(
+            self.show_result_win,
+            text=text,
+            font=("Arial", 28, "bold"),
+            fg="#BEB09D",
+            bg="#26282E",
+            wraplength=700,
+            justify="center"
+        ).pack(pady=20)
+
+        
+
+        Button(self.show_result_win, text="Back", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
+               borderwidth=1, relief="solid", command=self.admin_window_frame).pack(pady=20)
+
+
+    
 
 if __name__ == '__main__':
     root = Tk()
