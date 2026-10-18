@@ -1,4 +1,4 @@
-d/* ================================
+/* ================================
    DATABASE CREATION
    ================================ */
 
@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_voted TINYINT(1) NOT NULL DEFAULT 0,
     voted_condi TINYINT(1) NOT NULL DEFAULT 0,
     role ENUM('admin','voter') NOT NULL DEFAULT 'voter',
+    photo_path VARCHAR(255) NULL,
     PRIMARY KEY (user_id),
     UNIQUE (adharId),
     UNIQUE (voterID)
@@ -51,6 +52,8 @@ CREATE TABLE IF NOT EXISTS candidates (
     party_name VARCHAR(100) NOT NULL,
     symbol VARCHAR(100),
     voter INT NOT NULL DEFAULT 0,
+    photo_path VARCHAR(255) NULL,
+    symbol_path VARCHAR(255) NULL,
     PRIMARY KEY (candidate_id)
 );
 
@@ -65,14 +68,13 @@ INSERT INTO candidates (name, age, gender, party_name, symbol, voter) VALUES
 
 INSERT INTO users (username, pwd, adharId, voterID, gender, is_voted, voted_condi, role) VALUES
 
-
-('rahul', 'pass123', 'AADH1000002', 'VOTER100002', 'Male', 0, 0, 'voter'),
-('priya', 'pass123', 'AADH1000003', 'VOTER100003', 'Female', 0, 0, 'voter'),
-('amit', 'pass123', 'AADH1000004', 'VOTER100004', 'Male', 0, 0, 'voter'),
-('neha', 'pass123', 'AADH1000005', 'VOTER100005', 'Female', 0, 0, 'voter'),
-('vikram', 'pass123', 'AADH1000006', 'VOTER100006', 'Male', 0, 0, 'voter'),
-('kavita', 'pass123', 'AADH1000007', 'VOTER100007', 'Female', 0, 0, 'voter'),
-('suresh', 'pass123', 'AADH1000008', 'VOTER100008', 'Male', 0, 0, 'voter'),
-('sunita', 'pass123', 'AADH1000009', 'VOTER100009', 'Female', 0, 0, 'voter'),
-('rohit', 'pass123', 'AADH1000010', 'VOTER100010', 'Male', 0, 0, 'voter'),
-('anita', 'pass123', 'AADH1000011', 'VOTER100011', 'Female', 0, 0, 'voter');
+('rahul',  'pass123', '123456789012', 'VOTER100002', 'Male',   0, 0, 'voter'),
+('priya',  'pass123', '234567890123', 'VOTER100003', 'Female', 0, 0, 'voter'),
+('amit',   'pass123', '345678901234', 'VOTER100004', 'Male',   0, 0, 'voter'),
+('neha',   'pass123', '456789012345', 'VOTER100005', 'Female', 0, 0, 'voter'),
+('vikram', 'pass123', '567890123456', 'VOTER100006', 'Male',   0, 0, 'voter'),
+('kavita', 'pass123', '678901234567', 'VOTER100007', 'Female', 0, 0, 'voter'),
+('suresh', 'pass123', '789012345678', 'VOTER100008', 'Male',   0, 0, 'voter'),
+('sunita', 'pass123', '890123456789', 'VOTER100009', 'Female', 0, 0, 'voter'),
+('rohit',  'pass123', '901234567890', 'VOTER100010', 'Male',   0, 0, 'voter'),
+('anita',  'pass123', '012345678901', 'VOTER100011', 'Female', 0, 0, 'voter');
