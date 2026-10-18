@@ -1,1037 +1,1065 @@
-import tkinter
-from tkinter import *
-from tkinter import messagebox
-from tkinter import ttk
-from tkinter.ttk import Treeview, Style
+"""
+Voting Assistant  -  Tkinter + MySQL
+Requires:  pip install mysql-connector-python matplotlib pillow
+"""
+import functools
+import os
 import re
+import shutil
+import uuid
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+
 import mysql.connector
-import matplotlib
-from matplotlib import pyplot as plt
+from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from PIL import Image, ImageTk, ImageOps, ImageDraw
+
+# ----------------------------------------------------------------------
+# Configuration
+# ----------------------------------------------------------------------
+DB_CONFIG = dict(
+    host="127.0.0.1",
+    port=3306,
+    user="root",
+    password="vikrant",
+    database="voting_system",
+    ssl_disabled=True,
+    connection_timeout=10,
+    autocommit=True,
+)
+
+# ----------------------------------------------------------------------
+# Colour theme / fonts  (change them here and the whole app follows)
+# ----------------------------------------------------------------------
+BG = "#1E1F22"          # window background
+HEADER = "#17181B"      # top bar
+PANEL = "#26282E"       # cards / panels
+PANEL_ALT = "#2F3139"   # inputs, secondary buttons
+BORDER = "#3A3D45"
+ACCENT = "#BEB09D"      # gold / sand accent
+ACCENT_HOVER = "#D6C9B4"
+TEXT = "#F2F2F2"
+MUTED = "#9A9DA5"
+GREEN = "#2E7D55"
+GREEN_HOVER = "#3A9667"
+RED = "#9B3535"
+RED_HOVER = "#B84444"
+FONT = "Segoe UI"
+CHART_COLORS = ["#BEB09D", "#4C9F70", "#5B8DEF", "#E07A5F", "#B56CD9", "#E5C158", "#4CC3D9", "#D96C8A"]
+
+THUMB = (56, 56)        # table thumbnails
+ROW_HEIGHT = 64
+
+
+# ----------------------------------------------------------------------
+# Small UI helpers
+# ----------------------------------------------------------------------
+def make_button(parent, text, command, kind="secondary", size=13, width=None, padx=20, pady=9):
+    """Flat button with hover effect. kind: primary | secondary | success | danger"""
+    palette = {
+        "primary": (ACCENT, "#1E1F22", ACCENT_HOVER),
+        "secondary": (PANEL_ALT, ACCENT, BORDER),
+        "success": (GREEN, "#FFFFFF", GREEN_HOVER),
+        "danger": (RED, "#FFFFFF", RED_HOVER),
+    }
+    bg, fg, hover = palette[kind]
+    btn = tk.Button(parent, text=text, command=command, font=(FONT, size, "bold"),
+                    bg=bg, fg=fg, activebackground=hover, activeforeground=fg,
+                    disabledforeground="#6C6F78", relief="flat", bd=0, cursor="hand2",
+                    padx=padx, pady=pady, highlightthickness=0)
+    if width:
+        btn.config(width=width)
+
+    def on_enter(_):
+        if str(btn["state"]) == "normal":
+            btn.config(bg=hover)
+
+    def on_leave(_):
+        btn.config(bg=bg if str(btn["state"]) == "normal" else PANEL_ALT)
+
+    btn.bind("<Enter>", on_enter)
+    btn.bind("<Leave>", on_leave)
+    return btn
+
+
+def db_safe(fn):
+    """Shows a friendly message instead of crashing when MySQL raises an error."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except mysql.connector.Error as err:
+            messagebox.showerror("Database Error", f"Something went wrong with the database:\n\n{err}")
+    return wrapper
 
 
 class VotingAssistant:
-    is_on = True
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    IMAGE_DIR = os.path.join(APP_DIR, "images")
 
-    bg = "yellow"
+    # ==================================================================
+    # Start-up
+    # ==================================================================
+    def __init__(self, root):
+        self.root = root
+        self.is_on = False          # is voting open?
+        self.failed = False
+        self.voter = None           # dict of the voter currently voting
+        self.user_photos = []       # keep PhotoImage references alive
+        self.cand_photos = []
+        self.result_photos = []
+        self.vote_photos = []
 
-    # database connection
-    try:
-        def __init__(self, root):
-            self.root = root
-            root.geometry("800x500")
-            root.title("Voting Assistant")
+        root.title("Voting Assistant")
+        root.geometry("1200x760")
+        root.minsize(1000, 650)
+        root.configure(bg=BG)
+        try:
             root.state("zoomed")
-            root.config(bg="#1E1F22")
-
-            self.conn = mysql.connector.connect(
-                host="localhost",
-                database="voting_system",
-                username="root",
-                password="vikrant"
-            )
-            self.cursr = self.conn.cursor()
-            self.main_menu()
-    except:
-        messagebox.showwarning("DatabaseError", "Try again after some time")
-
-    def clear_screen(self):
-        for widget in self.root.winfo_children():
-            if isinstance(widget, Frame):
-                widget.destroy()
-
-    # opening screen
-    try:
-        def main_menu(self):
-            self.center_frame = Frame(self.root, bg="#1E1F22")
-            self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
-            self.main_frm = Frame(self.center_frame, bg="#26282E", height=500, width=500, borderwidth=1, relief="solid",
-                                  highlightthickness=2, highlightbackground="#BEB09D")
-            self.main_frm.pack(pady=10)
-
-            title_label = Label(self.main_frm, text="VOTING ASSISTANT", font="georgia 50", bg="#1E1F22", fg="gray",
-                                width=20)
-            title_label.pack(pady=20)
-
-            Button(self.main_frm, text="Admin Login", font=("Arial", 20), command=self.admin_login, borderwidth=1,
-                   relief="solid", bg='#1E1F22', fg="#BEB09D", width=20).pack(pady=20, padx=20, ipadx=30, ipady=5)
-            btn = Button(self.main_frm, text="User Login", font=("Arial", 20), borderwidth=1, relief="solid",
-                         bg='#1E1F22',
-                         fg="#BEB09D", width=20, command=self.user_login).pack(pady=20, padx=20, ipadx=30, ipady=5)
-    except:
-        messagebox.showerror("VA", "Error in Main Page")
-
-    # admin login screen and check login
-    try:
-        def admin_login(self):
-            self.admin_login_window = Toplevel(self.root)
-            self.admin_login_window.title("Admin Login")
-            self.admin_login_window.geometry("300x300")
-            self.admin_login_window.config(bg="#1E1F22")
-
-            Label(self.admin_login_window, text="Admin Login", font=("Georgia", 20), bg="#1E1F22", fg="white").pack(
-                pady=5,
-                padx=5)
-            Label(self.admin_login_window, text="Username", font=("Arial", 20), bg="#1E1F22", fg="white").pack(pady=5,
-                                                                                                               padx=5)
-            self.admin_username = Entry(self.admin_login_window, font=("Arial", 20), relief="solid", width=15)
-            self.admin_username.pack(pady=5, padx=5)
-
-            Label(self.admin_login_window, text="Password", font=("Arial", 20), bg="#1E1F22", fg="white").pack(pady=5,
-                                                                                                               padx=5)
-            self.admin_password = Entry(self.admin_login_window, font=("Arial", 20), show="*", relief="solid",
-                                        borderwidth=1, width=15)
-            self.admin_password.pack(pady=5, padx=5)
-
-            Button(self.admin_login_window, text="Login", font=("Arial", 20), command=self.check_admin_login,
-                   bg='#1E1F22', fg="#BEB09D", width=15).pack(pady=5, padx=5)
-
-            Button(self.admin_login_window, text="Back", font=("Arial", 20), command=self.main_menu,
-                   bg='#1E1F22', fg="#BEB09D", width=15).pack(pady=5, padx=5)
-
-
-        def check_admin_login(self):
-            if self.conn.is_connected():
-                query = "SELECT * FROM users WHERE username = %s AND pwd = %s"
-                self.cursr.execute(query, (self.admin_username.get(), self.admin_password.get()))
-                user = self.cursr.fetchone()
-                if user:
-                    if user[8] == "admin":
-                        messagebox.showinfo("Login Success", "Admin login successful")
-
-                        self.admin_window_frame()
-
-                        self.admin_username.delete(0, END)
-                        self.admin_password.delete(0, END)
-                        self.admin_login_window.destroy()
-                        self.main_frm.destroy()
-                    else:
-                        messagebox.showerror("Access Denied", "You are not authorized as admin")
-
-                        self.admin_username.delete(0, END)
-                        self.admin_password.delete(0, END)
-                        self.admin_login_window.destroy()
-                        # self.main_frm.destroy()
-
-                else:
-                    messagebox.showerror("Login Failed", "Invalid Username or Password")
-                    self.admin_username.delete(0, END)
-                    self.admin_password.delete(0, END)
-                    self.admin_login_window.destroy()
-
-            else:
-                messagebox.showerror("Server Error", "Try again ")
-    except:
-        messagebox.showerror("VA", "Error in Admin login or Check Login")
-
-    # user login screen and check login
-    try:
-        def user_login(self):
-
-            if self.is_on == False:
-                messagebox.showinfo("VA", "Voting is off now")
-            else:
-
-                # self.center_frame.destroy()
-                self.user_login_window = Toplevel(self.root)
-                self.user_login_window.title("User Login")
-                self.user_login_window.geometry("300x300")
-                self.user_login_window.config(bg="#1E1F22")
-
-                Label(self.user_login_window, text="User Login", font=("Georgia", 20), bg="#1E1F22", fg="white").pack(
-                    pady=5,
-                    padx=5)
-                Label(self.user_login_window, text="Aadhar/Voter ID number", font=("Arial", 20), bg="#1E1F22",
-                      fg="white").pack(pady=5,
-                                       padx=5)
-                self.user_username = Entry(self.user_login_window, font=("Arial", 20), relief="solid", borderwidth=1,
-                                           width=15)
-                self.user_username.pack(pady=5, padx=5)
-
-                Label(self.user_login_window, text="Password", font=("Arial", 20), bg="#1E1F22", fg="white").pack(
-                    pady=5,
-                    padx=5)
-                self.user_password = Entry(self.user_login_window, font=("Arial", 20), show="*", relief="solid",
-                                           borderwidth=1, width=15)
-                self.user_password.pack(pady=5, padx=5)
-
-                Button(self.user_login_window, text="Login", font=("Arial", 20), command=self.check_user_login,
-                       bg='#1E1F22', fg="#BEB09D", width=15).pack(pady=5, padx=5)
-                Button(self.user_login_window, text="Back", font=("Arial", 20), command=self.main_menu,
-                       bg='#1E1F22', fg="#BEB09D", width=15).pack(pady=5, padx=5)
-
-        def check_user_login(self):
-            if self.conn.is_connected():
-                query = "SELECT * FROM users WHERE ( voterID = %s OR adharId = %s )AND pwd = %s"
-                self.cursr.execute(query,
-                                   (self.user_username.get(), self.user_username.get(), self.user_password.get()))
-                user = self.cursr.fetchone()
-                print(user)
-
-                if user:
-                    if user[8] == "voter" or user[8] == 'admin':
-                        print(user)
-                        if user[7] != 0:
-                               messagebox.showwarning("Login Fail", "User is already Voted")
-                        else:
-                            messagebox.showinfo("Login Success", "User login successful")
-                            # self.user_username.delete(0, END)
-                            # self.user_password.delete(0, END)
-                            self.set_username = user[1]
-                            self.set_gender = user[5]
-                            self.set_aadhar = user[3]
-                            self.set_voter = user[4]
-                            self.set_uid = user[0]
-                            self.user_login_window.destroy()
-                            self.voting_screen()
-
-
-
-                    else:
-                        self.user_login_window.destroy()
-                        messagebox.showerror("Login Failed", " user Invalid Username or Password")
-                        # self.user_username.delete(0, END)
-                        # self.user_password.delete(0, END)
-                        self.user_login_window.destroy()
-
-
-
-                else:
-                    messagebox.showerror("Login Failed", "not userInvalid Username or Password")
-                    self.user_login_window.destroy()
-            else:
-                messagebox.showerror("Server Error", "Try again ")
-    except:
-        messagebox.showerror("VA", "Error in Usre login or Check Login")
-
-    # start voting
-    try:
-        def start_voting(self):
-            if self.is_on:
-                messagebox.showinfo("VA", "Voting is off now")
-
-                self.is_on = False
-            else:
-                messagebox.showinfo("VA", "Votin is on now")
-                self.is_on = True
-    except:
-        messagebox.showerror("VA", "Error in Start Voting")
-
-    # goto home page
-    try:
-        def go_to_home(self):
-            self.clear_screen()
-            self.center_frame.destroy()
-            self.main_menu()
-    except:
-        messagebox.showerror("VA", "Error in Go to home page Btn")
-    try:
-        def rest_voting(self):
-            if self.conn.is_connected():
-                self.cursr.execute("UPDATE users SET is_voted = 0, voted_condi = 0")
-                self.cursr.execute("UPDATE candidates SET voter = 0")
-                self.conn.commit()
-
-                messagebox.showinfo("Success", "Voting has been reset successfully!")
-            else:
-                messagebox.showerror("VA", "not")
-
-    except:
-        messagebox.showerror("VA", "not")
-
-    # admin panel
-    try:
-        def admin_window_frame(self):
-            self.center_frame.destroy()
-            self.center_frame = Frame(self.root, bg="#1E1F22")
-            self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
-            self.admin_main_frm = Frame(self.center_frame, bg="#26282E", height=700, width=800, borderwidth=1,
-                                        relief="solid",
-                                        highlightthickness=2, highlightbackground="gray")
-            self.admin_main_frm.pack(ipady=25, ipadx=25)
-            title_label = Label(self.admin_main_frm, text="VOTIONG ASSISTANT", font="georgia 50", bg="#1E1F22",
-                                fg="gray")
-            title_label.grid(row=0, columnspan=3, pady=20, padx=20)
-
-            Button(self.admin_main_frm, text="Add New User", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1, relief="solid", command=self.add_new_user).grid(row=1, column=0, padx=15, pady=15,
-                                                                                  ipadx=10, ipady=20)
-            Button(self.admin_main_frm, text="Add Candidate", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1, relief="solid", command=self.add_candidate_window).grid(row=1, column=1, padx=15,
-                                                                                          pady=15,
-                                                                                          ipadx=10, ipady=20)
-            Button(self.admin_main_frm, text="Show Users ", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1, relief="solid", command=self.show_users).grid(row=1, column=2, padx=15, pady=15,
-                                                                                ipadx=10, ipady=20)
-            Button(self.admin_main_frm, text="Shown All Candidates", font="Arial 20", bg='#1E1F22', fg="#BEB09D",
-                   width=20,
-                   borderwidth=1, relief="solid", command=self.show_candidates).grid(row=2, column=0, padx=15, pady=15,
-                                                                                     ipadx=10, ipady=20)
-            Button(self.admin_main_frm, text="Show Result", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1,
-                   relief="solid", command=self.show_result).grid(row=2, column=1, padx=15, pady=15, ipadx=10, ipady=20)
-            Button(self.admin_main_frm, text="Show Graph", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1,
-                   relief="solid", command=self.show_graph).grid(row=2, column=2, padx=15, pady=15, ipadx=10, ipady=20)
-            Button(self.admin_main_frm, text="Start Voting", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1, relief="solid", command=self.start_voting).grid(row=3, column=0, padx=15, pady=15,
-                                                                                  ipadx=10, ipady=20)
-            Button(self.admin_main_frm, text="Go To Home Page", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1, relief="solid", command=self.go_to_home).grid(row=3, column=1, padx=15, pady=15,
-                                                                                ipadx=10, ipady=20)
-            Button(self.admin_main_frm, text="Exit", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1,
-                   relief="solid", command=self.root.destroy).grid(row=4, column=1, padx=15, pady=15, ipadx=10,
-                                                                   ipady=20)
-            Button(self.admin_main_frm, text="Reset", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1,
-                   relief="solid", command=self.rest_voting).grid(row=3, column=2, padx=15, pady=15, ipadx=10,
-                                                                  ipady=20)
-    except:
-        messagebox.showerror("VA", "Error in Admin pannel")
-
-    # voting window
-    try:
-        def submit_vote(self):
-            voterid = self.set_uid
-            selected = self.candidate_var.get()
-
-            print(voterid, selected)
-
-            if selected == 0:  # 0 means no selection for IntVar()
-                messagebox.showerror("VA", "Please select a candidate before voting.")
-                return
-
-            self.cursr.execute("SELECT is_voted FROM users WHERE user_id = %s", (voterid,))
-            voter = self.cursr.fetchone()
-            print(voter)
-
-            if not voter:
-                messagebox.showerror("VA", "Voter not found.")
-            elif voter[0] == '1':
-                messagebox.showerror("VA", "You have already voted.")
-            else:
-                # Update candidate's vote count
-                # qry ="UPDATE candidates SET voter =voter +1 WHERE candidate_id = %s"
-                # self.cursr.execute("UPDATE candidates SET voter = voter + 1 WHERE candidate_id = 1",(selected,))
-                self.cursr.execute(
-                    "UPDATE users SET is_voted = 1  WHERE user_id = %s",
-                    (voterid,)
-                )
-                self.cursr.execute(
-                    "UPDATE candidates SET voter = voter + 1 WHERE candidate_id = %s",
-                    (selected,)
-                )
-                # Mark user as voted
-                # self.cursr.execute("UPDATE users SET Is_voted = 'yes' WHERE user_id = % ",(voterid,))
-
-                self.conn.commit()
-                messagebox.showinfo("VA", "✅ Your vote has been successfully recorded!")
-
-                self.voting_screen_window.destroy()
-
-        # def voting_screen(self):
-        #     self.voting_screen_window = Toplevel(self.root)
-        #     self.voting_screen_window.title("Voting Screen")
-        #     self.voting_screen_window.geometry("500x600")
-        #     self.voting_screen_window.config(bg="#1E1F22")
-        #     self.voting_screen_window.state('zoomed')
-        #
-        #     Label(self.voting_screen_window, text="Voting System", font=("Georgia", 30),
-        #           bg="#1E1F22", fg="white", width=25).pack(pady=10)
-        #
-        #     Label(self.voting_screen_window, text=f'👤 Username : {self.set_username}', font=("Arial", 18),
-        #           bg="#1E1F22", fg="white").pack(pady=5)
-        #     Label(self.voting_screen_window, text=f'Gender: {self.set_gender}', font=("Arial", 18),
-        #           bg="#1E1F22", fg="white").pack(pady=5)
-        #     Label(self.voting_screen_window, text=f'🆔 Voter IDv : {self.set_voter}', font=("Arial", 18),
-        #           bg="#1E1F22", fg="white").pack(pady=5)
-        #
-        #     Label(self.voting_screen_window, text="Choose a Candidate", font=("Arial", 16),
-        #           bg="#1E1F22", fg="white").pack(pady=15)
-        #
-        #     # Candidate selection using Radiobuttons
-        #     self.candidate_var = IntVar()
-        #     self.cursr.execute("SELECT candidate_id, name FROM candidates")
-        #     candidates = self.cursr.fetchall()
-        #
-        #
-        #
-        #     if not candidates:
-        #         Label(self.voting_screen_window, text="No candidates available.",
-        #               font=("Arial", 16), bg="#1E1F22", fg="red").pack(pady=10)
-        #         return
-        #
-        #
-        #     cols = 2   # 👈 number of cards per row
-        #     row = col = 0
-        #
-        #     for cid, cname in candidates:
-        #
-        #         card = Frame(self.voting_screen_window, bg="#26282E", bd=2, relief="ridge",width=50)
-        #         card.pack(padx=20, pady=8)
-        #         col += 1
-        #         if col == cols:
-        #             col = 0
-        #             row += 1
-        #
-        #         Radiobutton(
-        #             card,
-        #             text=cname,
-        #             variable=self.candidate_var,
-        #             value=cid,
-        #             font=("Arial", 20),
-        #             bg="#1E1F22",
-        #             fg="white",
-        #             selectcolor="#ff69b4",
-        #             activebackground="#1E1F22",
-        #             activeforeground="white"
-        #         ).grid(row=row,column=col, padx=15, pady=12)
-        #
-        #     Button(
-        #         self.voting_screen_window,
-        #         text="Cast Vote",
-        #         command=self.submit_vote,
-        #         bg="#1E1F22",
-        #         fg="white",
-        #         font=("Arial", 18),
-        #         padx=20,
-        #         pady=5
-        #     ).pack(pady=20)
-        def voting_screen(self):
-            self.voting_screen_window = Toplevel(self.root)
-            self.voting_screen_window.title("Voting Screen")
-            self.voting_screen_window.geometry("500x600")
-            self.voting_screen_window.config(bg="#1E1F22")
-            self.voting_screen_window.state('zoomed')  # ✅ fixed
-
-            Label(self.voting_screen_window, text="Voting System", font=("Georgia", 30),
-                  bg="#1E1F22", fg="white", width=25).pack(pady=10)
-
-            Label(self.voting_screen_window, text=f'👤 Username : {self.set_username}', font=("Arial", 18),
-                  bg="#1E1F22", fg="white").pack(pady=5)
-            Label(self.voting_screen_window, text=f'Gender: {self.set_gender}', font=("Arial", 18),
-                  bg="#1E1F22", fg="white").pack(pady=5)
-            Label(self.voting_screen_window, text=f'🆔 Voter ID : {self.set_voter}', font=("Arial", 18),
-                  bg="#1E1F22", fg="white").pack(pady=5)
-
-            Label(self.voting_screen_window, text="Choose a Candidate", font=("Arial", 16),
-                  bg="#1E1F22", fg="white").pack(pady=15)
-
-            self.candidate_var = IntVar()
-            self.cursr.execute("SELECT candidate_id, name FROM candidates")
-            candidates = self.cursr.fetchall()
-
-            if not candidates:
-                Label(self.voting_screen_window, text="No candidates available.",
-                      font=("Arial", 16), bg="#1E1F22", fg="red").pack(pady=10)
-                return
-
-            grid_frame = Frame(self.voting_screen_window, bg="#1E1F22")
-            grid_frame.pack(padx=20, pady=10, fill="both", expand=True)
-
-            cols = 4
-            row = col = 0
-
-            for cid, cname in candidates:
-                card = Frame(grid_frame, bg="#26282E", bd=2, relief="ridge", padx=10, pady=10)
-                card.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
-
-                Radiobutton(
-                    card,
-                    text=cname,
-                    variable=self.candidate_var,
-                    value=cid,
-                    font=("Arial", 18, "bold"),
-                    indicatoron=0,
-                    width=20,
-                    pady=10,
-                    bg="#26282E",
-                    fg="white",
-                    selectcolor="#ff69b4",
-                    activebackground="#26282E",
-                    activeforeground="white"
-                ).pack(anchor="w")
-
-                col += 1
-                if col == cols:
-                    col = 0
-                    row += 1
-
-            Button(
-                self.voting_screen_window,
-                text="Cast Vote",
-                command=self.submit_vote,
-                bg="#1E1F22",
-                fg="white",
-                font=("Arial", 18),
-                padx=20,
-                pady=5
-            ).pack(pady=20)
-
-            Button(self.voting_screen_window, text="Back", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1, relief="solid", command=self.admin_window_frame).pack(pady=20)
-
-    except:
-        messagebox.showerror("VA", "Error in voting window")
-
-    # add new user and show table
-    try:
-        def add_new_user_fun(self):
-            if self.conn.is_connected():
-                # query = "insert into users (username, pwd, adharId, voterID, genter, role) values(%s,%s,%s,%s,%s,'regular')"
-                # self.cursr.execute(query, (self.add_new_name.get(),self.add_new_password.get(),self.add_new_adharId.get(),self.add_new_voterId.get(),self.dr_gender.get()))
-                # self.conn.commit()
-                # messagebox.showinfo("VA","Registration Successful ")
-                username = self.add_new_name.get()
-                password = self.add_new_password.get()
-                aadhar = self.add_new_adharId.get()
-                voter_id = self.add_new_voterId.get()
-                gender = self.dr_gender.get()
-
-                # Validation
-                if not re.fullmatch(r"\d{12}", aadhar):
-                    messagebox.showerror("Error", "Invalid Aadhar (must be 12 digits)")
-                    return
-                if not re.fullmatch(r"[A-Za-z0-9]{5,15}", voter_id):
-                    messagebox.showerror("Error", "Invalid Voter ID")
-                    return
-                if gender not in ["Male", "Female","Other"]:
-                    messagebox.showerror("Error", "Select a valid gender")
-                    return
-                if not username or not password:
-                    messagebox.showerror("Error", "All fields are required")
-                    return
-
-                # Hash password
-                # hashed_pwd = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-
-                try:
-                    query = "INSERT INTO users (username, pwd, adharId, voterID, gender, role) VALUES (%s, %s, %s, %s, %s, 'regular')"
-                    self.cursr.execute(query, (username, password, aadhar, voter_id, gender))
-                    self.conn.commit()
-                    messagebox.showinfo("Success", "User registered successfully.")
-                    self.add_new_user_window.destroy()
-                except mysql.connector.Error as err:
-                    messagebox.showerror("DB Error", str(err))
-
-        def add_new_user(self):
-            # self.center_frame.destroy()
-            self.add_new_user_window = Toplevel(self.root)
-            self.add_new_user_window.title("Admin Login")
-            self.add_new_user_window.geometry("500x700")
-            self.add_new_user_window.config(bg="#1E1F22")
-
-            Label(self.add_new_user_window, text="Add New User", font=("Georgia", 20), bg="#1E1F22", fg="white").pack(
-                pady=5,
-                padx=5)
-            Label(self.add_new_user_window, text="Name", font=("Arial", 20), bg="#1E1F22", fg="white").pack(pady=5,
-                                                                                                            padx=5)
-            self.add_new_name = Entry(self.add_new_user_window, font=("Arial", 20), relief="solid", borderwidth=1,
-                                      width=15)
-            self.add_new_name.pack(pady=5, padx=5)
-
-            Label(self.add_new_user_window, text="Aadhar Card Number ", font=("Arial", 20), bg="#1E1F22",
-                  fg="white").pack(
-                pady=5,
-                padx=5)
-            self.add_new_adharId = Entry(self.add_new_user_window, font=("Arial", 20), relief="solid", borderwidth=1,
-                                         width=15)
-            self.add_new_adharId.pack(pady=5, padx=5)
-
-            Label(self.add_new_user_window, text="Voter Id Card Number ", font=("Arial", 20), bg="#1E1F22",
-                  fg="white").pack(pady=5,
-                                   padx=5)
-            self.add_new_voterId = Entry(self.add_new_user_window, font=("Arial", 20), relief="solid", borderwidth=1,
-                                         width=15)
-            self.add_new_voterId.pack(pady=5, padx=5)
-
-            Label(self.add_new_user_window, text="Select Gender", font=("Arial", 20), bg="#1E1F22", fg="white").pack(
-                pady=5,
-                padx=5)
-
-            self.dr_gender = StringVar()
-            self.dr_gender.set("Select Gender ")
-            self.options = ["Select Gender ", "Male", "Female",'Other']
-            self.dp_scale = OptionMenu(self.add_new_user_window, self.dr_gender, *self.options, )
-            self.dp_scale.pack(pady=5, padx=5)
-
-            Label(self.add_new_user_window, text="Password", font=("Arial", 20), bg="#1E1F22", fg="white").pack(pady=5,
-                                                                                                                padx=5)
-            self.add_new_password = Entry(self.add_new_user_window, font=("Arial", 20), show="*", relief="solid",
-                                          borderwidth=1, width=15)
-            self.add_new_password.pack(pady=5, padx=5)
-
-            Button(self.add_new_user_window, text="Register", font=("Arial", 20), command=self.add_new_user_fun,
-                   bg='#1E1F22', fg="#BEB09D", width=15).pack(pady=5, padx=5)
-            Button(self.add_new_user_window, text="Back", font=("Arial", 20), command=self.add_new_user_window.destroy,
-                   bg='#1E1F22', fg="#BEB09D", width=15).pack(pady=5, padx=5)
-
-        def show_users(self):
-            self.clear_screen()
-            self.center_frame.destroy()
-
-            self.center_frame = Frame(self.root)
-            self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
-
-            self.user_table_frame = Frame(
-                self.center_frame, bg="#26282E",
-                height=600, width=1100,
-                borderwidth=1, relief="solid",
-                highlightthickness=2, highlightbackground="gray"
-            )
-            self.user_table_frame.pack(fill="both", expand=True)
-            self.user_table_frame.pack_propagate(False)
-
-            title_label = Label(self.user_table_frame, text="USERS", font="georgia 40", bg="#1E1F22", fg="gray")
-            title_label.pack(padx=20, pady=20)
-
-            search_frame = Frame(self.user_table_frame, bg="#26282E")
-            search_frame.pack(pady=5)
-
-            self.search_var = StringVar()
-            search_entry = Entry(search_frame, textvariable=self.search_var, font=("Arial", 14), width=30)
-            search_entry.pack(side=LEFT, padx=10)
-
-            search_btn = Button(search_frame, text="Search", font=("Arial", 12), bg="#1E1F22", fg="#BEB09D",
-                                command=self.search_users)
-            search_btn.pack(side=LEFT, padx=5)
-
-            reset_btn = Button(search_frame, text="Reset", font=("Arial", 12), bg="#1E1F22", fg="#BEB09D",
-                               command=self.load_all_users)
-            reset_btn.pack(side=LEFT, padx=5)
-
-            style = Style()
-            style.configure("Treeview", font=("Arial", 14),rowheight=25)  # Rows font
-            style.configure("Treeview.Heading", font=("Arial", 16, "bold"))
-
-            self.users_table = Treeview(self.user_table_frame)
-            self.users_table['columns'] = ('User_id', 'Username', 'Password', 'Adharcard_Id', 'Votercard_Id', 'Gender',
-                                           'Role')
-
-            for col in self.users_table['columns']:
-                self.users_table.column(col, anchor="center", width=160)
-                self.users_table.heading(col, text=col)
-
-            self.users_table.config(show="headings")
-            self.users_table.pack(fill="both", expand=True, padx=30, pady=30)
-
-            scrollbar = Scrollbar(self.user_table_frame, orient="vertical", command=self.users_table.yview)
-            scrollbar.pack(side=RIGHT, fill=Y)
-            self.users_table.configure(yscrollcommand=scrollbar.set)
-
-            self.load_all_users()
-
-            Button(self.user_table_frame, text="Back", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1, relief="solid", command=self.admin_window_frame).pack(pady=20)
-
-        def search_users(self):
-            keyword = self.search_var.get().lower()
-            if not keyword:
-                self.load_all_users()
-                return
-
-            self.users_table.delete(*self.users_table.get_children())
-            if self.conn.is_connected():
-                query = """SELECT user_id, username, pwd, adharId, voterID, gender, role FROM users 
-                           WHERE LOWER(username) LIKE %s OR LOWER(adharId) LIKE %s OR LOWER(voterID) LIKE %s"""
-                search_term = f"%{keyword}%"
-                self.cursr.execute(query, (search_term, search_term, search_term))
-                rows = self.cursr.fetchall()
-                for row in rows:
-                    self.users_table.insert("", END, values=row)
-                    
-                def load_all_users(self):
-            self.users_table.delete(*self.users_table.get_children())
-            if self.conn.is_connected():
-                self.cursr.execute("SELECT user_id, username, pwd, adharId, voterID, gender, role FROM users")
-                rows = self.cursr.fetchall()
-                for row in rows:
-                    self.users_table.insert("", END, values=row)
-    except:
-        messagebox.showerror("VA", "Error in add new user or see all user")
-
-    # add new candidate and show table
-    try:
-        def register_candidate(self):
-
-            name = self.candidate_name.get()
-            age = self.candidate_age.get()
-            gender = self.candidate_gender.get()
-            party = self.candidate_party.get()
-            symbol = self.candidate_symbol.get()
-            # constituency = self.candidate_constituency.get()
-
-            if not re.fullmatch(r"[A-Za-z ]{3,25}", name):
-                messagebox.showerror("Error", "Invalid Candidate Name (3–25 letters only)")
-                return
-
-
-            if not re.fullmatch(r"\d{1,2}", age) or not (18 <= int(age) <= 99):
-                messagebox.showerror("Error", "Invalid Age (must be between 18 and 99)")
-                return
-
-
-            if gender not in ["Male", "Female", "Other"]:
-                messagebox.showerror("Error", "Select a valid gender")
-                return
-
-
-            if not re.fullmatch(r"[A-Za-z0-9 .-]{3,30}", party):
-                messagebox.showerror("Error", "Invalid Party Name (3–30 characters)")
-                return
-
-
-            if not re.fullmatch(r"[A-Za-z0-9 _-]{2,20}", symbol):
-                messagebox.showerror("Error", "Invalid Party Symbol (2–20 characters)")
-                return
-
-
-            if not name or not age or not party or not symbol:
-                messagebox.showerror("Error", "All fields are required")
-                return
-
+        except tk.TclError:
             try:
-                query = "INSERT INTO candidates (name, age, gender, party_name, symbol) VALUES (%s, %s, %s, %s, %s)"
-                self.cursr.execute(query, (name, int(age), gender, party, symbol,))
-                self.conn.commit()
-                messagebox.showinfo("Success", "Candidate registered successfully.")
-                self.add_candidate.destroy()
+                root.attributes("-zoomed", True)
+            except tk.TclError:
+                pass
+        root.protocol("WM_DELETE_WINDOW", self.exit_app)
+
+        self.setup_styles()
+
+        try:
+            self.conn = mysql.connector.connect(**DB_CONFIG)
+            self.ensure_photo_columns()
+        except mysql.connector.Error as err:
+            messagebox.showerror("Database Error",
+                                 f"Could not connect to the database.\n\nCheck that MySQL is running and the "
+                                 f"settings at the top of this file are correct.\n\n{err}")
+            self.failed = True
+            return
+
+        self.container = tk.Frame(root, bg=BG)
+        self.container.pack(fill="both", expand=True)
+        self.main_menu()
+
+    def setup_styles(self):
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure("Treeview", background=PANEL, fieldbackground=PANEL, foreground=TEXT,
+                        rowheight=ROW_HEIGHT, font=(FONT, 12), borderwidth=0, bordercolor=PANEL,
+                        lightcolor=PANEL, darkcolor=PANEL)
+        style.map("Treeview", background=[("selected", "#4A463F")], foreground=[("selected", TEXT)])
+        style.configure("Treeview.Heading", background=HEADER, foreground=ACCENT,
+                        font=(FONT, 12, "bold"), relief="flat", padding=8)
+        style.map("Treeview.Heading", background=[("active", "#2A2C32")])
+        style.configure("Vertical.TScrollbar", background="#4A4D56", troughcolor=BG, bordercolor=BG,
+                        arrowcolor=ACCENT, lightcolor="#4A4D56", darkcolor="#4A4D56")
+        style.map("Vertical.TScrollbar", background=[("active", "#6A6E78")])
+        style.configure("TCombobox", fieldbackground=PANEL_ALT, background=PANEL_ALT, foreground=TEXT,
+                        arrowcolor=ACCENT, bordercolor=BORDER, lightcolor=PANEL_ALT, darkcolor=PANEL_ALT,
+                        padding=6)
+        style.map("TCombobox", fieldbackground=[("readonly", PANEL_ALT)],
+                  foreground=[("readonly", TEXT)], selectbackground=[("readonly", PANEL_ALT)],
+                  selectforeground=[("readonly", TEXT)])
+        self.root.option_add("*TCombobox*Listbox.background", PANEL_ALT)
+        self.root.option_add("*TCombobox*Listbox.foreground", TEXT)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#1E1F22")
+        self.root.option_add("*TCombobox*Listbox.font", (FONT, 12))
+
+    # ==================================================================
+    # Database helpers
+    # ==================================================================
+    def db_all(self, sql, params=()):
+        self.conn.ping(reconnect=True, attempts=2, delay=1)
+        cur = self.conn.cursor()
+        try:
+            cur.execute(sql, params)
+            return cur.fetchall()
+        finally:
+            cur.close()
+
+    def db_one(self, sql, params=()):
+        self.conn.ping(reconnect=True, attempts=2, delay=1)
+        cur = self.conn.cursor()
+        try:
+            cur.execute(sql, params)
+            return cur.fetchone()
+        finally:
+            cur.close()
+
+    def db_exec(self, sql, params=()):
+        self.conn.ping(reconnect=True, attempts=2, delay=1)
+        cur = self.conn.cursor()
+        try:
+            cur.execute(sql, params)
+            return cur.rowcount
+        finally:
+            cur.close()
+
+    def ensure_photo_columns(self):
+        """Adds the image columns (photo_path / symbol_path) if they do not exist yet."""
+        for table, column in (("users", "photo_path"), ("candidates", "photo_path"),
+                              ("candidates", "symbol_path")):
+            found = self.db_one(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+                (table, column))
+            if found[0] == 0:
+                self.db_exec(f"ALTER TABLE {table} ADD COLUMN {column} VARCHAR(255) NULL")
+
+    # ==================================================================
+    # Photo helpers
+    # ==================================================================
+    def load_image(self, path, size, mode="crop", placeholder="No Photo"):
+        """Returns a PIL image of exactly `size`.
+        mode 'crop'    -> fills the square (good for faces)
+        mode 'contain' -> whole image on a white square (good for party symbols/logos)
+        Falls back to a grey placeholder if the file is missing or unreadable."""
+        try:
+            if path:
+                full = path if os.path.isabs(path) else os.path.join(self.APP_DIR, path)
+                if os.path.exists(full):
+                    img = Image.open(full)
+                    if mode == "contain":
+                        img = img.convert("RGBA")
+                        fitted = ImageOps.contain(img, size)
+                        bg = Image.new("RGBA", size, "#FFFFFF")
+                        bg.paste(fitted, ((size[0] - fitted.width) // 2, (size[1] - fitted.height) // 2), fitted)
+                        return bg.convert("RGB")
+                    return ImageOps.fit(img.convert("RGB"), size)
+        except Exception:
+            pass
+        img = Image.new("RGB", size, "#3A3D45")
+        draw = ImageDraw.Draw(img)
+        box = draw.textbbox((0, 0), placeholder)
+        draw.text(((size[0] - (box[2] - box[0])) // 2, (size[1] - (box[3] - box[1])) // 2),
+                  placeholder, fill="#C8CAD0")
+        return img
+
+    def make_thumb(self, path, size, mode="crop", placeholder="No Photo"):
+        return ImageTk.PhotoImage(self.load_image(path, size, mode, placeholder))
+
+    def make_pair_thumb(self, photo_path, symbol_path, size=THUMB):
+        """Candidate photo and party symbol side by side (for table rows)."""
+        a = self.load_image(photo_path, size, "crop", "No Photo")
+        b = self.load_image(symbol_path, size, "contain", "No Symbol")
+        pair = Image.new("RGB", (size[0] * 2 + 6, size[1]), PANEL)
+        pair.paste(a, (0, 0))
+        pair.paste(b, (size[0] + 6, 0))
+        return ImageTk.PhotoImage(pair)
+
+    def save_image(self, src, prefix):
+        """Copies the chosen photo into ./images and returns the relative path stored in the DB."""
+        if not src:
+            return None
+        os.makedirs(self.IMAGE_DIR, exist_ok=True)
+        name = f"{prefix}_{uuid.uuid4().hex}{os.path.splitext(src)[1].lower()}"
+        shutil.copy(src, os.path.join(self.IMAGE_DIR, name))
+        return "images/" + name
+
+    def delete_image(self, rel_path):
+        try:
+            if rel_path:
+                os.remove(os.path.join(self.APP_DIR, rel_path))
+        except OSError:
+            pass
+
+    def photo_picker(self, parent, holder, size=(150, 150), button_text="Choose Photo",
+                     mode="crop", placeholder="No Photo"):
+        """Preview + 'Choose Photo' button. The chosen file path is kept in holder['path']."""
+        box = tk.Frame(parent, bg=PANEL)
+        empty = self.make_thumb(None, size, mode, placeholder)
+        preview = tk.Label(box, image=empty, bg=PANEL, highlightthickness=1,
+                           highlightbackground=BORDER)
+        preview.image = empty
+        preview.pack(pady=(0, 8))
+
+        def browse():
+            path = filedialog.askopenfilename(
+                parent=parent.winfo_toplevel(), title="Select Photo",
+                filetypes=[("Image files", "*.png *.jpg *.jpeg *.gif *.bmp *.webp"), ("All files", "*.*")])
+            if not path:
+                return
+            try:
+                with Image.open(path) as test:
+                    test.verify()
+                photo = self.make_thumb(path, size, mode)
+            except Exception:
+                messagebox.showerror("Photo", "That file could not be opened as an image.",
+                                     parent=parent.winfo_toplevel())
+                return
+            holder["path"] = path
+            preview.config(image=photo)
+            preview.image = photo
+
+        make_button(box, button_text, browse, "secondary", size=11, pady=6).pack()
+        tk.Label(box, text="PNG / JPG (optional)", font=(FONT, 9), bg=PANEL, fg=MUTED).pack(pady=(6, 0))
+        return box
+
+    # ==================================================================
+    # Layout helpers (screens + dialogs)
+    # ==================================================================
+    def clear_container(self):
+        for w in self.container.winfo_children():
+            w.destroy()
+
+    def new_screen(self, title, back=None, back_text="←  Back", right=None):
+        """Standard screen: header (back button | title | extra widget) + body frame."""
+        self.clear_container()
+        header = tk.Frame(self.container, bg=HEADER, height=72)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+        header.columnconfigure(0, weight=1, uniform="h")
+        header.columnconfigure(1, weight=0)
+        header.columnconfigure(2, weight=1, uniform="h")
+        header.rowconfigure(0, weight=1)
+
+        if back:
+            make_button(header, back_text, back, "secondary", size=12, pady=6).grid(
+                row=0, column=0, sticky="w", padx=24)
+        tk.Label(header, text=title, font=(FONT, 22, "bold"), bg=HEADER, fg=ACCENT).grid(row=0, column=1)
+        if right:
+            holder = tk.Frame(header, bg=HEADER)
+            holder.grid(row=0, column=2, sticky="e", padx=24)
+            right(holder)
+        tk.Frame(self.container, bg=ACCENT, height=2).pack(fill="x")
+
+        body = tk.Frame(self.container, bg=BG)
+        body.pack(fill="both", expand=True, padx=40, pady=24)
+        return body
+
+    def make_dialog(self, title, heading):
+        """Modal pop-up. Returns (window, body_frame)."""
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.resizable(False, False)
+        card = tk.Frame(win, bg=PANEL, highlightthickness=2, highlightbackground=ACCENT)
+        card.pack(padx=22, pady=22)
+        body = tk.Frame(card, bg=PANEL)
+        body.pack(padx=34, pady=26)
+        tk.Label(body, text=heading, font=("Georgia", 22, "bold"), bg=PANEL, fg=ACCENT).pack(pady=(0, 6))
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(4, 8))
+        return win, body
+
+    def open_dialog(self, win, focus=None):
+        win.update_idletasks()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+        win.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
+        win.grab_set()
+        (focus or win).focus_force()
+
+    def form_field(self, parent, label, show=None, width=26):
+        tk.Label(parent, text=label, font=(FONT, 11), bg=PANEL, fg=MUTED, anchor="w").pack(fill="x", pady=(10, 2))
+        entry = tk.Entry(parent, font=(FONT, 13), width=width, show=show or "", bg=PANEL_ALT, fg=TEXT,
+                         insertbackground=TEXT, relief="flat", highlightthickness=1,
+                         highlightbackground=BORDER, highlightcolor=ACCENT)
+        entry.pack(fill="x", ipady=6)
+        return entry
+
+    def form_combo(self, parent, label, values):
+        tk.Label(parent, text=label, font=(FONT, 11), bg=PANEL, fg=MUTED, anchor="w").pack(fill="x", pady=(10, 2))
+        var = tk.StringVar(value="Select")
+        combo = ttk.Combobox(parent, textvariable=var, values=values, state="readonly", font=(FONT, 13))
+        combo.pack(fill="x")
+        return var
+
+    def build_table(self, parent, columns, widths, photo_heading="Photo", photo_width=90):
+        wrap = tk.Frame(parent, bg=BORDER, padx=1, pady=1)
+        wrap.pack(fill="both", expand=True)
+        tree = ttk.Treeview(wrap, columns=columns, show="tree headings", selectmode="browse")
+        tree.heading("#0", text=photo_heading)
+        tree.column("#0", width=photo_width, anchor="center", stretch=False)
+        for col, width in zip(columns, widths):
+            tree.heading(col, text=col)
+            tree.column(col, anchor="center", width=width, minwidth=60)
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True)
+        tree.tag_configure("odd", background="#2B2D33")
+        tree.tag_configure("even", background=PANEL)
+        return tree
+
+    def search_bar(self, parent, on_search, on_reset):
+        bar = tk.Frame(parent, bg=BG)
+        bar.pack(fill="x", pady=(0, 14))
+        var = tk.StringVar()
+        entry = tk.Entry(bar, textvariable=var, font=(FONT, 13), width=34, bg=PANEL_ALT, fg=TEXT,
+                         insertbackground=TEXT, relief="flat", highlightthickness=1,
+                         highlightbackground=BORDER, highlightcolor=ACCENT)
+        entry.pack(side="left", ipady=7, padx=(0, 10))
+        entry.bind("<Return>", lambda e: on_search())
+        make_button(bar, "Search", on_search, "primary", size=12, pady=6).pack(side="left", padx=(0, 8))
+        make_button(bar, "Reset", on_reset, "secondary", size=12, pady=6).pack(side="left")
+        count = tk.Label(bar, text="", font=(FONT, 12), bg=BG, fg=MUTED)
+        count.pack(side="right")
+        return var, count
+
+    # ==================================================================
+    # Main menu
+    # ==================================================================
+    def main_menu(self):
+        self.voter = None
+        self.clear_container()
+        wrap = tk.Frame(self.container, bg=BG)
+        wrap.pack(fill="both", expand=True)
+
+        card = tk.Frame(wrap, bg=PANEL, highlightthickness=2, highlightbackground=ACCENT)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        inner = tk.Frame(card, bg=PANEL)
+        inner.pack(padx=80, pady=56)
+
+        tk.Label(inner, text="VOTING ASSISTANT", font=("Georgia", 38, "bold"), bg=PANEL, fg=ACCENT).pack()
+        tk.Label(inner, text="Secure  •  Simple  •  Transparent", font=(FONT, 13),
+                 bg=PANEL, fg=MUTED).pack(pady=(6, 26))
+        tk.Frame(inner, bg=BORDER, height=1).pack(fill="x", pady=(0, 30))
+
+        make_button(inner, "Admin Login", self.admin_login, "secondary", size=17, width=24, pady=14).pack(pady=10)
+        make_button(inner, "User Login", self.user_login, "primary", size=17, width=24, pady=14).pack(pady=10)
+
+        status_color = "#4CAF7A" if self.is_on else "#D9534F"
+        status_text = "●  Voting is OPEN" if self.is_on else "●  Voting is CLOSED"
+        tk.Label(inner, text=status_text, font=(FONT, 12, "bold"), bg=PANEL, fg=status_color).pack(pady=(26, 0))
+
+    # ==================================================================
+    # Admin login
+    # ==================================================================
+    def admin_login(self):
+        win, body = self.make_dialog("Admin Login", "Admin Login")
+        user = self.form_field(body, "Username")
+        pwd = self.form_field(body, "Password", show="•")
+
+        @db_safe
+        def submit(_=None):
+            username, password = user.get().strip(), pwd.get()
+            if not username or not password:
+                messagebox.showerror("Login", "Enter username and password.", parent=win)
+                return
+            rows = self.db_all("SELECT role FROM users WHERE username = %s AND pwd = %s", (username, password))
+            if any(r[0] == "admin" for r in rows):
+                win.destroy()
+                self.admin_panel()
+            elif rows:
+                messagebox.showerror("Access Denied", "You are not authorized as admin.", parent=win)
+                pwd.delete(0, "end")
+            else:
+                messagebox.showerror("Login Failed", "Invalid username or password.", parent=win)
+                pwd.delete(0, "end")
+
+        btns = tk.Frame(body, bg=PANEL)
+        btns.pack(fill="x", pady=(22, 0))
+        make_button(btns, "Login", submit, "primary", width=12).pack(side="left", expand=True, padx=(0, 6))
+        make_button(btns, "Cancel", win.destroy, "secondary", width=12).pack(side="left", expand=True, padx=(6, 0))
+        win.bind("<Return>", submit)
+        win.bind("<Escape>", lambda e: win.destroy())
+        self.open_dialog(win, user)
+
+    # ==================================================================
+    # Voter login
+    # ==================================================================
+    def user_login(self):
+        if not self.is_on:
+            messagebox.showinfo("Voting Closed", "Voting is not open right now.\nPlease try again later.")
+            return
+        win, body = self.make_dialog("User Login", "Voter Login")
+        ident = self.form_field(body, "Aadhar / Voter ID number")
+        pwd = self.form_field(body, "Password", show="•")
+
+        @db_safe
+        def submit(_=None):
+            ident_val, password = ident.get().strip(), pwd.get()
+            if not ident_val or not password:
+                messagebox.showerror("Login", "Enter your ID and password.", parent=win)
+                return
+            row = self.db_one(
+                "SELECT user_id, username, gender, adharId, voterID, is_voted, role, photo_path "
+                "FROM users WHERE (voterID = %s OR adharId = %s) AND pwd = %s",
+                (ident_val, ident_val, password))
+            if not row:
+                messagebox.showerror("Login Failed", "Invalid ID or password.", parent=win)
+                pwd.delete(0, "end")
+                return
+            uid, name, gender, aadhar, voter_id, is_voted, role, photo = row
+            if role != "voter":
+                messagebox.showerror("Not Allowed", "Admin accounts cannot vote.", parent=win)
+                return
+            if is_voted:
+                messagebox.showwarning("Already Voted", "You have already cast your vote.", parent=win)
+                return
+            self.voter = dict(uid=uid, name=name, gender=gender, aadhar=aadhar, voter_id=voter_id, photo=photo)
+            win.destroy()
+            self.voting_screen()
+
+        btns = tk.Frame(body, bg=PANEL)
+        btns.pack(fill="x", pady=(22, 0))
+        make_button(btns, "Login", submit, "primary", width=12).pack(side="left", expand=True, padx=(0, 6))
+        make_button(btns, "Cancel", win.destroy, "secondary", width=12).pack(side="left", expand=True, padx=(6, 0))
+        win.bind("<Return>", submit)
+        win.bind("<Escape>", lambda e: win.destroy())
+        self.open_dialog(win, ident)
+
+    # ==================================================================
+    # Admin dashboard
+    # ==================================================================
+    @db_safe
+    def admin_panel(self):
+        def status_badge(parent):
+            color = "#4CAF7A" if self.is_on else "#D9534F"
+            text = "●  Voting OPEN" if self.is_on else "●  Voting CLOSED"
+            tk.Label(parent, text=text, font=(FONT, 12, "bold"), bg=HEADER, fg=color).pack()
+
+        body = self.new_screen("Admin Dashboard", back=self.main_menu, back_text="⏻  Logout", right=status_badge)
+
+        total, voted = self.db_one("SELECT COUNT(*), COALESCE(SUM(is_voted), 0) FROM users WHERE role = 'voter'")
+        total, voted = int(total), int(voted)
+        cands = int(self.db_one("SELECT COUNT(*) FROM candidates")[0])
+
+        content = tk.Frame(body, bg=BG)
+        content.place(relx=0.5, rely=0.5, anchor="center")
+
+        # --- stat cards -------------------------------------------------
+        stats = tk.Frame(content, bg=BG)
+        stats.pack(pady=(0, 24))
+        for i, (label, value) in enumerate([("Registered Voters", total), ("Votes Cast", voted),
+                                            ("Candidates", cands)]):
+            c = tk.Frame(stats, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
+            c.grid(row=0, column=i, padx=14)
+            tk.Label(c, text=str(value), font=(FONT, 28, "bold"), bg=PANEL, fg=ACCENT, width=8).pack(pady=(14, 0))
+            tk.Label(c, text=label, font=(FONT, 11), bg=PANEL, fg=MUTED).pack(pady=(0, 14), padx=20)
+
+        # --- action buttons (3 x 3 grid) ---------------------------------
+        grid = tk.Frame(content, bg=BG)
+        grid.pack()
+        vote_text = "■  Stop Voting" if self.is_on else "▶  Start Voting"
+        actions = [
+            ("＋  Add New User", self.add_new_user, "secondary"),
+            ("＋  Add Candidate", self.add_candidate_window, "secondary"),
+            (vote_text, self.toggle_voting, "danger" if self.is_on else "success"),
+            ("☰  Show Users", self.show_users, "secondary"),
+            ("☰  Show Candidates", self.show_candidates, "secondary"),
+            ("↺  Reset All Votes", self.reset_voting, "danger"),
+            ("🏆  Show Result", self.show_result, "secondary"),
+            ("▥  Show Graph", self.show_graph, "secondary"),
+            ("✕  Exit", self.exit_app, "secondary"),
+        ]
+        for i, (text, cmd, kind) in enumerate(actions):
+            make_button(grid, text, cmd, kind, size=15, width=22, pady=22).grid(
+                row=i // 3, column=i % 3, padx=12, pady=12)
+
+    def toggle_voting(self):
+        self.is_on = not self.is_on
+        messagebox.showinfo("Voting", "Voting is now OPEN." if self.is_on else "Voting is now CLOSED.")
+        self.admin_panel()
+
+    @db_safe
+    def reset_voting(self):
+        if not messagebox.askyesno("Reset Votes",
+                                   "This will erase ALL votes and let every voter vote again.\n\nContinue?",
+                                   icon="warning"):
+            return
+        self.db_exec("UPDATE users SET is_voted = 0, voted_condi = 0")
+        self.db_exec("UPDATE candidates SET voter = 0")
+        messagebox.showinfo("Reset", "Voting has been reset successfully.")
+        self.admin_panel()
+
+    def exit_app(self):
+        if messagebox.askyesno("Exit", "Close the Voting Assistant?"):
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.root.destroy()
+
+    # ==================================================================
+    # Add user
+    # ==================================================================
+    def add_new_user(self):
+        win, body = self.make_dialog("Add New User", "Add New User")
+        cols = tk.Frame(body, bg=PANEL)
+        cols.pack()
+        left = tk.Frame(cols, bg=PANEL)
+        left.pack(side="left", padx=(0, 34))
+        right = tk.Frame(cols, bg=PANEL)
+        right.pack(side="left", anchor="n", pady=(26, 0))
+
+        name = self.form_field(left, "Full Name")
+        aadhar = self.form_field(left, "Aadhar Card Number (12 digits)")
+        voter_id = self.form_field(left, "Voter ID Card Number")
+        gender = self.form_combo(left, "Gender", ["Male", "Female", "Other"])
+        pwd = self.form_field(left, "Password", show="•")
+
+        holder = {"path": None}
+        self.photo_picker(right, holder).pack()
+
+        @db_safe
+        def submit(_=None):
+            u, a, v, g, p = name.get().strip(), aadhar.get().strip(), voter_id.get().strip(), gender.get(), pwd.get()
+            if not u or not p:
+                return messagebox.showerror("Error", "Name and password are required.", parent=win)
+            if not re.fullmatch(r"\d{12}", a):
+                return messagebox.showerror("Error", "Invalid Aadhar (must be 12 digits).", parent=win)
+            if not re.fullmatch(r"[A-Za-z0-9]{5,15}", v):
+                return messagebox.showerror("Error", "Invalid Voter ID (5-15 letters/digits).", parent=win)
+            if g not in ("Male", "Female", "Other"):
+                return messagebox.showerror("Error", "Select a gender.", parent=win)
+            photo_path = None
+            try:
+                photo_path = self.save_image(holder["path"], "user")
+                self.db_exec("INSERT INTO users (username, pwd, adharId, voterID, gender, role, photo_path) "
+                             "VALUES (%s, %s, %s, %s, %s, 'voter', %s)", (u, p, a, v, g, photo_path))
             except mysql.connector.Error as err:
-                messagebox.showerror("Error", f"Database Error: {err}")
+                self.delete_image(photo_path)
+                msg = "That Aadhar or Voter ID is already registered." if getattr(err, "errno", 0) == 1062 else str(err)
+                return messagebox.showerror("Database Error", msg, parent=win)
+            messagebox.showinfo("Success", "User registered successfully.", parent=win)
+            win.destroy()
+            self.admin_panel()
 
-        def add_candidate_window(self):
-            # self.center_frame.destroy()
-            self.center_frame = Frame(self.root)
-            self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
+        btns = tk.Frame(body, bg=PANEL)
+        btns.pack(fill="x", pady=(24, 0))
+        make_button(btns, "Register", submit, "primary", width=16).pack(side="left", expand=True, padx=(0, 8))
+        make_button(btns, "Cancel", win.destroy, "secondary", width=16).pack(side="left", expand=True, padx=(8, 0))
+        win.bind("<Escape>", lambda e: win.destroy())
+        self.open_dialog(win, name)
 
-            self.add_candidate = Toplevel(self.center_frame)
-            self.add_candidate.title("Add New Candidate")
-            self.add_candidate.geometry("500x700")
-            self.add_candidate.config(bg="#1E1F22")
+    # ==================================================================
+    # Add candidate
+    # ==================================================================
+    def add_candidate_window(self):
+        win, body = self.make_dialog("Add Candidate", "Register New Candidate")
+        cols = tk.Frame(body, bg=PANEL)
+        cols.pack()
+        left = tk.Frame(cols, bg=PANEL)
+        left.pack(side="left", padx=(0, 34))
+        right = tk.Frame(cols, bg=PANEL)
+        right.pack(side="left", anchor="n", pady=(10, 0))
 
-            Label(self.add_candidate, text="Register New Candidate", font=("Georgia", 20),
-                  bg="#1E1F22", fg="white").pack(pady=10)
+        name = self.form_field(left, "Candidate Name")
+        age = self.form_field(left, "Age")
+        gender = self.form_combo(left, "Gender", ["Male", "Female", "Other"])
+        party = self.form_field(left, "Party Name")
+        symbol = self.form_field(left, "Party Symbol Name")
 
-            # Candidate Name
-            Label(self.add_candidate, text="Candidate Name", font=("Arial", 18),
-                  bg="#1E1F22", fg="white").pack(pady=5)
-            self.candidate_name = Entry(self.add_candidate, font=("Arial", 18), width=20)
-            self.candidate_name.pack(pady=5)
+        holder = {"path": None}
+        symbol_holder = {"path": None}
+        tk.Label(right, text="Candidate Photo", font=(FONT, 11), bg=PANEL, fg=MUTED).pack(anchor="w")
+        self.photo_picker(right, holder, size=(130, 130)).pack(pady=(4, 14))
+        tk.Label(right, text="Party Symbol Image", font=(FONT, 11), bg=PANEL, fg=MUTED).pack(anchor="w")
+        self.photo_picker(right, symbol_holder, size=(100, 100), button_text="Choose Symbol",
+                          mode="contain", placeholder="No Symbol").pack(pady=(4, 0))
 
-            # Age
-            Label(self.add_candidate, text="Age", font=("Arial", 18),
-                  bg="#1E1F22", fg="white").pack(pady=5)
-            self.candidate_age = Entry(self.add_candidate, font=("Arial", 18), width=20)
-            self.candidate_age.pack(pady=5)
+        @db_safe
+        def submit(_=None):
+            n, a, g, p, s = name.get().strip(), age.get().strip(), gender.get(), party.get().strip(), symbol.get().strip()
+            if not re.fullmatch(r"[A-Za-z ]{3,25}", n):
+                return messagebox.showerror("Error", "Invalid name (3-25 letters only).", parent=win)
+            if not re.fullmatch(r"\d{1,2}", a) or not 18 <= int(a) <= 99:
+                return messagebox.showerror("Error", "Invalid age (must be between 18 and 99).", parent=win)
+            if g not in ("Male", "Female", "Other"):
+                return messagebox.showerror("Error", "Select a gender.", parent=win)
+            if not re.fullmatch(r"[A-Za-z0-9 .-]{3,30}", p):
+                return messagebox.showerror("Error", "Invalid party name (3-30 characters).", parent=win)
+            if not re.fullmatch(r"[A-Za-z0-9 _-]{2,20}", s):
+                return messagebox.showerror("Error", "Invalid party symbol (2-20 characters).", parent=win)
+            photo_path = symbol_path = None
+            try:
+                photo_path = self.save_image(holder["path"], "cand")
+                symbol_path = self.save_image(symbol_holder["path"], "sym")
+                self.db_exec("INSERT INTO candidates (name, age, gender, party_name, symbol, photo_path, symbol_path) "
+                             "VALUES (%s, %s, %s, %s, %s, %s, %s)", (n, int(a), g, p, s, photo_path, symbol_path))
+            except mysql.connector.Error as err:
+                self.delete_image(photo_path)
+                self.delete_image(symbol_path)
+                return messagebox.showerror("Database Error", str(err), parent=win)
+            messagebox.showinfo("Success", "Candidate registered successfully.", parent=win)
+            win.destroy()
+            self.admin_panel()
 
-            # Gender
-            Label(self.add_candidate, text="Gender", font=("Arial", 18),
-                  bg="#1E1F22", fg="white").pack(pady=5)
-            self.candidate_gender = StringVar()
-            self.candidate_gender.set("Select Gender")
-            gender_options = ["Male", "Female", "Other"]
-            OptionMenu(self.add_candidate, self.candidate_gender, *gender_options).pack(pady=5)
+        btns = tk.Frame(body, bg=PANEL)
+        btns.pack(fill="x", pady=(24, 0))
+        make_button(btns, "Register Candidate", submit, "primary", width=16).pack(side="left", expand=True, padx=(0, 8))
+        make_button(btns, "Cancel", win.destroy, "secondary", width=16).pack(side="left", expand=True, padx=(8, 0))
+        win.bind("<Escape>", lambda e: win.destroy())
+        self.open_dialog(win, name)
 
-            # Party Name
-            Label(self.add_candidate, text="Party Name", font=("Arial", 18),
-                  bg="#1E1F22", fg="white").pack(pady=5)
-            self.candidate_party = Entry(self.add_candidate, font=("Arial", 18), width=20)
-            self.candidate_party.pack(pady=5)
+    # ==================================================================
+    # Show users
+    # ==================================================================
+    @db_safe
+    def show_users(self):
+        body = self.new_screen("Registered Users", back=self.admin_panel, back_text="←  Dashboard")
+        var, count = self.search_bar(body, lambda: self.load_users(var.get(), count), lambda: (
+            var.set(""), self.load_users("", count)))
+        self.users_table = self.build_table(
+            body, ("ID", "Username", "Aadhar No", "Voter ID", "Gender", "Role", "Voted"),
+            (70, 180, 180, 160, 110, 110, 90))
+        self.load_users("", count)
 
-            # Symbol
-            Label(self.add_candidate, text="Party Symbol", font=("Arial", 18),
-                  bg="#1E1F22", fg="white").pack(pady=5)
-            self.candidate_symbol = Entry(self.add_candidate, font=("Arial", 18), width=20)
-            self.candidate_symbol.pack(pady=5)
+    @db_safe
+    def load_users(self, keyword, count_label):
+        sql = ("SELECT user_id, username, adharId, voterID, gender, role, is_voted, photo_path FROM users")
+        params = ()
+        keyword = keyword.strip().lower()
+        if keyword:
+            sql += " WHERE LOWER(username) LIKE %s OR LOWER(adharId) LIKE %s OR LOWER(voterID) LIKE %s"
+            params = (f"%{keyword}%",) * 3
+        rows = self.db_all(sql + " ORDER BY user_id", params)
 
-            # Submit
-            Button(self.add_candidate, text="Register Candidate", font=("Arial", 18),
-                   bg='#1E1F22', fg="#BEB09D", command=self.register_candidate).pack(pady=10)
+        self.users_table.delete(*self.users_table.get_children())
+        self.user_photos = []
+        for i, r in enumerate(rows):
+            photo = self.make_thumb(r[7], THUMB)
+            self.user_photos.append(photo)
+            self.users_table.insert("", "end", image=photo, tags=("odd" if i % 2 else "even",),
+                                    values=(r[0], r[1], r[2], r[3], r[4], r[5].capitalize(),
+                                            "Yes" if r[6] else "No"))
+        count_label.config(text=f"{len(rows)} user(s)")
 
-            Button(self.add_candidate, text=" Back", font=("Arial", 18),
-                   bg='#1E1F22', fg="#BEB09D", command=self.add_candidate.destroy).pack(pady=10)
+    # ==================================================================
+    # Show candidates
+    # ==================================================================
+    @db_safe
+    def show_candidates(self):
+        body = self.new_screen("Candidates", back=self.admin_panel, back_text="←  Dashboard")
+        var, count = self.search_bar(body, lambda: self.load_candidates(var.get(), count), lambda: (
+            var.set(""), self.load_candidates("", count)))
+        self.candidate_table = self.build_table(
+            body, ("ID", "Name", "Age", "Gender", "Party", "Symbol"), (70, 210, 80, 110, 230, 130),
+            photo_heading="Photo / Symbol", photo_width=175)
+        self.load_candidates("", count)
 
-        def show_candidates(self):
-            self.clear_screen()
-            self.center_frame.destroy()
+    @db_safe
+    def load_candidates(self, keyword, count_label):
+        sql = ("SELECT candidate_id, name, age, gender, party_name, symbol, photo_path, symbol_path "
+               "FROM candidates")
+        params = ()
+        keyword = keyword.strip().lower()
+        if keyword:
+            sql += " WHERE LOWER(name) LIKE %s OR LOWER(party_name) LIKE %s OR LOWER(symbol) LIKE %s"
+            params = (f"%{keyword}%",) * 3
+        rows = self.db_all(sql + " ORDER BY candidate_id", params)
 
-            self.center_frame = Frame(self.root)
-            self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
+        self.candidate_table.delete(*self.candidate_table.get_children())
+        self.cand_photos = []
+        for i, r in enumerate(rows):
+            photo = self.make_pair_thumb(r[6], r[7])
+            self.cand_photos.append(photo)
+            self.candidate_table.insert("", "end", image=photo, tags=("odd" if i % 2 else "even",), values=r[:6])
+        count_label.config(text=f"{len(rows)} candidate(s)")
 
-            self.candidate_table_frame = Frame(
-                self.center_frame, bg="#26282E",
-                height=600, width=1100,
-                borderwidth=1, relief="solid",
-                highlightthickness=2, highlightbackground="gray"
-            )
-            self.candidate_table_frame.pack(fill="both", expand=True)
-            self.candidate_table_frame.pack_propagate(False)
+    # ==================================================================
+    # Voting screen
+    # ==================================================================
+    @db_safe
+    def voting_screen(self):
+        v = self.voter
+        body = self.new_screen("Cast Your Vote", back=self.cancel_voting, back_text="←  Cancel")
 
-            title_label = Label(self.candidate_table_frame, text="CANDIDATES", font="georgia 40", bg="#1E1F22",
-                                fg="gray")
-            title_label.pack(padx=20, pady=20)
+        # --- voter strip ------------------------------------------------
+        strip = tk.Frame(body, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
+        strip.pack(fill="x")
+        self.voter_photo = self.make_thumb(v["photo"], (72, 72))
+        tk.Label(strip, image=self.voter_photo, bg=PANEL).pack(side="left", padx=16, pady=12)
+        info = tk.Frame(strip, bg=PANEL)
+        info.pack(side="left")
+        tk.Label(info, text=v["name"], font=(FONT, 17, "bold"), bg=PANEL, fg=TEXT, anchor="w").pack(anchor="w")
+        tk.Label(info, text=f"Voter ID: {v['voter_id']}     •     Gender: {v['gender']}",
+                 font=(FONT, 12), bg=PANEL, fg=MUTED).pack(anchor="w", pady=(2, 0))
+        tk.Label(strip, text="Select ONE candidate, then press  Cast Vote", font=(FONT, 12),
+                 bg=PANEL, fg=ACCENT).pack(side="right", padx=24)
 
-            search_frame = Frame(self.candidate_table_frame, bg="#26282E")
-            search_frame.pack(pady=5)
+        # --- footer (packed before the scroll area so it is always visible)
+        footer = tk.Frame(body, bg=BG)
+        footer.pack(side="bottom", fill="x", pady=(14, 0))
+        self.selected_label = tk.Label(footer, text="No candidate selected", font=(FONT, 13), bg=BG, fg=MUTED)
+        self.selected_label.pack(side="left")
+        self.cast_btn = make_button(footer, "✔  Cast Vote", self.confirm_and_vote, "success", size=15, pady=11,
+                                    padx=36)
+        self.cast_btn.pack(side="right")
+        self.cast_btn.config(state="disabled", bg=PANEL_ALT)
 
-            self.search_var = StringVar()
-            search_entry = Entry(search_frame, textvariable=self.search_var, font=("Arial", 14), width=30)
-            search_entry.pack(side=LEFT, padx=10)
+        candidates = self.db_all("SELECT candidate_id, name, party_name, symbol, photo_path, symbol_path "
+                                 "FROM candidates ORDER BY candidate_id")
+        if not candidates:
+            tk.Label(body, text="No candidates are available yet.", font=(FONT, 18), bg=BG, fg="#D9534F").pack(
+                expand=True)
+            return
 
-            search_btn = Button(search_frame, text="Search", font=("Arial", 12), bg="#1E1F22", fg="#BEB09D",
-                                command=self.search_candidate)
-            search_btn.pack(side=LEFT, padx=5)
+        # --- scrollable candidate grid -----------------------------------
+        area = tk.Frame(body, bg=BG)
+        area.pack(fill="both", expand=True, pady=(16, 0))
+        canvas = tk.Canvas(area, bg=BG, highlightthickness=0)
+        sb = ttk.Scrollbar(area, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        grid = tk.Frame(canvas, bg=BG)
+        win_id = canvas.create_window((0, 0), window=grid, anchor="nw")
 
-            reset_btn = Button(search_frame, text="Reset", font=("Arial", 12), bg="#1E1F22", fg="#BEB09D",
-                               command=self.load_all_candidate)
-            reset_btn.pack(side=LEFT, padx=5)
-            style = Style()
-            style.configure("Treeview", font=("Arial", 14),rowheight=25)
-            style.configure("Treeview.Heading", font=("Arial", 16, "bold"))
+        self.candidate_var = tk.IntVar(value=0)
+        self.candidate_info = {}
+        self.card_widgets = {}
+        self.vote_photos = []
+        cards = []
+        for cid, name, party, symbol, photo_path, symbol_path in candidates:
+            self.candidate_info[cid] = (name, party)
+            cards.append(self.make_candidate_card(grid, cid, name, party, symbol, photo_path, symbol_path))
+        self.candidate_var.trace_add("write", self.refresh_selection)
 
-            self.candidate_table = Treeview(self.candidate_table_frame)
-            self.candidate_table['columns'] = ('candidate_id', 'name', 'age', 'gender', 'party_name', 'symbol')
+        state = {"cols": 0}
 
-            for col in self.candidate_table['columns']:
-                self.candidate_table.column(col, anchor="center", width=160)
-                self.candidate_table.heading(col, text=col)
+        def relayout(_=None):
+            w = canvas.winfo_width()
+            canvas.itemconfigure(win_id, width=w)
+            cols = max(1, min(len(cards), w // 262))
+            if cols != state["cols"]:
+                state["cols"] = cols
+                for i, card in enumerate(cards):
+                    card.grid(row=i // cols, column=i % cols, padx=14, pady=14, sticky="n")
+                for c in range(len(cards)):
+                    grid.columnconfigure(c, weight=1 if c < cols else 0)
+            canvas.configure(scrollregion=canvas.bbox("all"))
 
-            self.candidate_table.config(show="headings")
-            self.candidate_table.pack(fill="both", expand=True, padx=30, pady=30)
+        canvas.bind("<Configure>", relayout)
+        grid.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
 
-            scrollbar = Scrollbar(self.candidate_table_frame, orient="vertical", command=self.candidate_table.yview)
-            scrollbar.pack(side=RIGHT, fill=Y)
-            self.candidate_table.configure(yscrollcommand=scrollbar.set)
-
-            if self.conn.is_connected():
-                self.cursr.execute("SELECT candidate_id, name, age, gender, party_name, symbol FROM candidates")
-                candidates = self.cursr.fetchall()
-                for cand in candidates:
-                    self.candidate_table.insert("", END, values=cand)
-
-            Button(self.candidate_table_frame, text="Back", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-                   borderwidth=1, relief="solid", command=self.admin_window_frame).pack(pady=20)
-
-        def search_candidate(self):
-            keyword = self.search_var.get().lower()
-            if not keyword:
-                self.load_all_candidate()
-                return
-
-            self.candidate_table.delete(*self.candidate_table.get_children())
-            if self.conn.is_connected():
-                query = """SELECT candidate_id, name, age, gender, party_name, symbol FROM candidates 
-                           WHERE LOWER(name) LIKE %s OR LOWER(party_name) LIKE %s OR LOWER(symbol) LIKE %s"""
-                search_term = f"%{keyword}%"
-                self.cursr.execute(query, (search_term, search_term, search_term))
-                rows = self.cursr.fetchall()
-                for row in rows:
-                    self.candidate_table.insert("", END, values=row)
-
-        def load_all_candidate(self):
-            self.candidate_table.delete(*self.candidate_table.get_children())
-            if self.conn.is_connected():
-                self.cursr.execute("SELECT candidate_id, name, age, gender, party_name, symbol FROM candidates")
-                candidates = self.cursr.fetchall()
-
-                for cand in candidates:
-                    self.candidate_table.insert("", END, values=cand)
-    except:
-        messagebox.showerror("VA", "Error in add new candidate or see all user")
-
-    def show_graph(self):
-        self.clear_screen()
-
-        try:
-            if self.center_frame:
-                self.center_frame.destroy()
-
-            self.center_frame = Frame(self.root)
-            self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
-
-            self.show_result_window = Frame(
-                self.center_frame,
-                bg="#26282E",
-                height=800,
-                width=1000,
-                borderwidth=1,
-                relief="solid",
-                highlightthickness=2,
-                highlightbackground="gray"
-            )
-            self.show_result_window.pack(fill="both", expand=True)
-
-            Label(
-                self.show_result_window,
-                text="Voting Results - Bar & Pie Chart",
-                font=("Arial", 18, "bold"),
-                bg="#26282E",
-                fg="white"
-            ).pack(pady=10)
-
-            chart_frame = Frame(self.show_result_window, bg="white")
-            chart_frame.pack(padx=20, pady=10, fill="both", expand=True)
-
-            self.display_combined_charts(chart_frame)
-
-            Button(
-                self.show_result_window,
-                text="Back",
-                font=("Arial", 16),
-                bg='#1E1F22',
-                fg="#BEB09D",
-                width=15,
-                borderwidth=1,
-                relief="solid",
-                command=self.admin_window_frame
-            ).pack(side="bottom", pady=12)
-
-        except Exception as e:
-            messagebox.showerror("VA", f"Error in graph window: {e}")
-
-    def get_vote_data(self):
-        self.cursr.execute("SELECT name, voter FROM candidates")
-        result = self.cursr.fetchall()
-
-        self.cursr.execute("SELECT gender, COUNT(*) FROM users WHERE is_voted='yes' GROUP BY gender")
-        result1 = self.cursr.fetchall()
-
-        self.cursr.execute("SELECT Is_voted, COUNT(*) FROM users GROUP BY Is_voted")
-        result2 = self.cursr.fetchall()
-
-        names = [row[0] for row in result]
-        votes = [row[1] for row in result]
-
-        gender = [row[0] for row in result1]
-        count = [row[1] for row in result1]
-
-        return names, votes, gender, count, result2
-
-    
-    def display_combined_charts(self, parent):
-        try:
-            names, votes, gender, count, result2 = self.get_vote_data()
-
-            if not names:
-                Label(parent, text="❌ No candidates found!", font=("Arial", 18, "bold"),
-                      fg="red", bg="white").pack(pady=60)
-                return
-
-            total_votes = sum(votes)
-            if total_votes == 0:
-                Label(parent, text="❌ No votes have been cast yet!", font=("Arial", 18, "bold"),
-                      fg="red", bg="white").pack(pady=60)
-                return
-
-            fig, axes = plt.subplots(2, 2, figsize=(9, 6))
-            fig.subplots_adjust(wspace=0.5, hspace=0.5)
-
-            voted_count = 0
-            not_voted_count = 0
-
-            for row in result2:
-                if row[0] == 1:
-                    voted_count = row[1]
-                elif row[0] == 0:
-                    not_voted_count = row[1]
-
-            ax1, ax2 = axes[0]
-            ax3, ax4 = axes[1]
-
-            ax1.bar(names, votes)
-            ax1.set_title("Voters Graph")
-            ax1.set_xlabel("Candidates")
-            ax1.set_ylabel("Votes")
-            ax1.tick_params(axis='x', rotation=30)
-
-            ax3.barh(gender, count)
-            ax3.set_title("Total Voted : Male vs Female")
-            ax3.set_xlabel("Number of Votes")
-
-            ax2.pie(votes, labels=names, autopct="%1.1f%%", startangle=140)
-            ax2.set_title("Voting Chart")
-            ax2.axis('equal')
-
-            if voted_count + not_voted_count > 0:
-                ax4.pie([voted_count, not_voted_count],
-                        labels=["Voted", "Not Voted"],
-                        autopct="%1.1f%%", startangle=140)
+        def wheel(e):
+            if e.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif e.num == 5:
+                canvas.yview_scroll(1, "units")
             else:
-                ax4.text(0.5, 0.5, "No users yet", ha="center", va="center")
+                canvas.yview_scroll(int(-e.delta / 120), "units")
 
-            ax4.set_title("Total Voting Status")
-            ax4.axis('equal')
+        def bind_wheel(_):
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                canvas.bind_all(seq, wheel)
 
-            canvas = FigureCanvasTkAgg(fig, master=parent)
-            canvas.draw()
-            canvas.get_tk_widget().pack(fill="both", expand=True)
+        def unbind_wheel(_):
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                canvas.unbind_all(seq)
 
-        except Exception as e:
-            messagebox.showerror("VA", f"Graph Error: {e}")
+        canvas.bind("<Enter>", bind_wheel)
+        canvas.bind("<Leave>", unbind_wheel)
+        canvas.bind("<Destroy>", unbind_wheel)
 
-    def show_result(self, ):
-        self.clear_screen()
-        self.center_frame.destroy()
+    def make_candidate_card(self, parent, cid, name, party, symbol, photo_path, symbol_path):
+        card = tk.Frame(parent, bg=PANEL, highlightthickness=3, highlightbackground=BORDER,
+                        cursor="hand2", width=230, height=365)
+        card.pack_propagate(False)
+        widgets = [card]
 
-        self.center_frame = Frame(self.root)
-        self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
+        photo = self.make_thumb(photo_path, (150, 150))
+        self.vote_photos.append(photo)
+        img = tk.Label(card, image=photo, bg=PANEL)
+        img.pack(pady=(14, 0))
+        widgets.append(img)
 
-        self.show_result_win = Frame(
-            self.center_frame,
-            bg="#26282E",
-            height=700,
-            width=800,
-            borderwidth=1,
-            relief="solid",
-            highlightthickness=2,
-            highlightbackground="gray"
-        )
-        self.show_result_win.pack()
-        if self.conn.is_connected():
-            self.cursr.execute("SELECT name, voter FROM candidates ORDER BY voter DESC")
-            data = self.cursr.fetchall()
-            names = [row[0] for row in data]
-            votes = [row[1] for row in data]
-            print(names)
-            print(votes)
+        for text, font, color, pad in ((name, (FONT, 16, "bold"), TEXT, (10, 2)),
+                                       (party, (FONT, 12), ACCENT, (0, 4))):
+            lbl = tk.Label(card, text=text, font=font, bg=PANEL, fg=color, wraplength=190, justify="center")
+            lbl.pack(pady=pad)
+            widgets.append(lbl)
 
+        # party symbol: image (if uploaded) + its name
+        sym_row = tk.Frame(card, bg=PANEL)
+        sym_row.pack(pady=(2, 8))
+        widgets.append(sym_row)
+        if symbol_path:
+            sym_img = self.make_thumb(symbol_path, (64, 64), mode="contain")
+            self.vote_photos.append(sym_img)
+            lbl = tk.Label(sym_row, image=sym_img, bg=PANEL)
+            lbl.pack(side="left", padx=(0, 10))
+            widgets.append(lbl)
+        if symbol or not symbol_path:
+            lbl = tk.Label(sym_row, text=symbol or "—", font=(FONT, 13, "bold"), bg=PANEL, fg=TEXT,
+                           wraplength=110)
+            lbl.pack(side="left")
+            widgets.append(lbl)
 
-        top_vote = votes[0]
+        tag = tk.Label(card, text="Click to select", font=(FONT, 11, "bold"), bg=PANEL, fg=MUTED)
+        tag.pack()
+        widgets.append(tag)
+        for w in widgets:
+            w.bind("<Button-1>", lambda e, c=cid: self.candidate_var.set(c))
+        self.card_widgets[cid] = (card, tag)
+        return card
 
-        if top_vote == 0:
-            text = "⚠️ No votes have been cast yet. Results will appear after voting starts."
+    def refresh_selection(self, *_):
+        selected = self.candidate_var.get()
+        for cid, (card, tag) in self.card_widgets.items():
+            if cid == selected:
+                card.config(highlightbackground=ACCENT)
+                tag.config(text="✔  SELECTED", fg=ACCENT)
+            else:
+                card.config(highlightbackground=BORDER)
+                tag.config(text="Click to select", fg=MUTED)
+        if selected in self.candidate_info:
+            self.selected_label.config(text=f"Selected:  {self.candidate_info[selected][0]}", fg=TEXT)
+            self.cast_btn.config(state="normal", bg=GREEN)
+
+    def confirm_and_vote(self):
+        cid = self.candidate_var.get()
+        if cid not in self.candidate_info:
+            messagebox.showerror("Vote", "Please select a candidate before voting.")
+            return
+        name, party = self.candidate_info[cid]
+        if messagebox.askyesno("Confirm Your Vote",
+                               f"You are voting for:\n\n{name}\n({party})\n\n"
+                               "Your vote cannot be changed afterwards.\nContinue?", icon="question"):
+            self.submit_vote(cid)
+
+    @db_safe
+    def submit_vote(self, cid):
+        self.conn.ping(reconnect=True, attempts=2, delay=1)
+        self.conn.start_transaction()
+        cur = self.conn.cursor()
+        try:
+            # only succeeds if this voter has not voted yet -> no double voting
+            cur.execute("UPDATE users SET is_voted = 1, voted_condi = 1 "
+                        "WHERE user_id = %s AND is_voted = 0 AND role = 'voter'", (self.voter["uid"],))
+            if cur.rowcount != 1:
+                self.conn.rollback()
+                messagebox.showerror("Vote", "You have already voted.")
+                self.main_menu()
+                return
+            cur.execute("UPDATE candidates SET voter = voter + 1 WHERE candidate_id = %s", (cid,))
+            if cur.rowcount != 1:
+                self.conn.rollback()
+                messagebox.showerror("Vote", "That candidate no longer exists. Please try again.")
+                self.voting_screen()
+                return
+            self.conn.commit()
+        except mysql.connector.Error:
+            self.conn.rollback()
+            raise
+        finally:
+            cur.close()
+        messagebox.showinfo("Thank You", "✅  Your vote has been recorded successfully!")
+        self.main_menu()
+
+    def cancel_voting(self):
+        if messagebox.askyesno("Cancel", "Leave without voting?"):
+            self.main_menu()
+
+    # ==================================================================
+    # Results
+    # ==================================================================
+    @db_safe
+    def show_result(self):
+        body = self.new_screen("Election Result", back=self.admin_panel, back_text="←  Dashboard")
+        rows = self.db_all("SELECT name, party_name, voter, photo_path, symbol_path FROM candidates "
+                           "ORDER BY voter DESC, name")
+        total_votes = sum(r[2] for r in rows)
+
+        if not rows:
+            text, color = "No candidates have been added yet.", MUTED
+        elif total_votes == 0:
+            text, color = "No votes have been cast yet.", MUTED
         else:
-            winners = [name for name, v in zip(names, votes) if v == top_vote]
-
+            top = rows[0][2]
+            winners = [r[0] for r in rows if r[2] == top]
             if len(winners) > 1:
-                text = f"🤝 It's a tie between {', '.join(winners)} with {top_vote} votes each!"
+                text, color = f"🤝  It's a tie between {', '.join(winners)}  ({top} votes each)", ACCENT
             else:
-                text = f"🏆 Winner: {winners[0]} with {top_vote} votes!"
+                text, color = f"🏆  Winner: {winners[0]}  with {top} votes", ACCENT
 
-        Label(
-            self.show_result_win,
-            text=text,
-            font=("Arial", 28, "bold"),
-            fg="#BEB09D",
-            bg="#26282E",
-            wraplength=700,
-            justify="center"
-        ).pack(pady=20)
+        banner = tk.Frame(body, bg=PANEL, highlightthickness=2, highlightbackground=ACCENT if total_votes else BORDER)
+        banner.pack(fill="x", pady=(0, 18))
+        tk.Label(banner, text=text, font=("Georgia", 24, "bold"), bg=PANEL, fg=color,
+                 wraplength=1000, pady=18).pack()
+        total, voted = self.db_one("SELECT COUNT(*), COALESCE(SUM(is_voted), 0) FROM users WHERE role = 'voter'")
+        total, voted = int(total), int(voted)
+        turnout = f"{voted / total * 100:.1f}%" if total else "0%"
+        tk.Label(banner, text=f"Turnout: {voted} of {total} registered voters ({turnout})",
+                 font=(FONT, 12), bg=PANEL, fg=MUTED).pack(pady=(0, 14))
 
-        
+        table = self.build_table(body, ("Rank", "Name", "Party", "Votes", "Share"), (80, 230, 250, 100, 100),
+                                 photo_heading="Photo / Symbol", photo_width=175)
+        self.result_photos = []
+        rank, last = 0, None
+        for i, (name, party, votes, photo_path, symbol_path) in enumerate(rows):
+            if votes != last:
+                rank, last = i + 1, votes
+            photo = self.make_pair_thumb(photo_path, symbol_path)
+            self.result_photos.append(photo)
+            share = f"{votes / total_votes * 100:.1f}%" if total_votes else "0%"
+            table.insert("", "end", image=photo, tags=("odd" if i % 2 else "even",),
+                         values=(f"#{rank}", name, party, votes, share))
 
-        Button(self.show_result_win, text="Back", font="Arial 20", bg='#1E1F22', fg="#BEB09D", width=20,
-               borderwidth=1, relief="solid", command=self.admin_window_frame).pack(pady=20)
+    # ==================================================================
+    # Graphs
+    # ==================================================================
+    @db_safe
+    def show_graph(self):
+        body = self.new_screen("Voting Graphs", back=self.admin_panel, back_text="←  Dashboard")
+        cands = self.db_all("SELECT name, voter FROM candidates ORDER BY candidate_id")
+        genders = self.db_all("SELECT gender, COUNT(*) FROM users WHERE is_voted = 1 AND role = 'voter' "
+                              "GROUP BY gender")
+        status = dict(self.db_all("SELECT is_voted, COUNT(*) FROM users WHERE role = 'voter' GROUP BY is_voted"))
+
+        if not cands or sum(c[1] for c in cands) == 0:
+            tk.Label(body, text="No votes have been cast yet.", font=(FONT, 20), bg=BG, fg=MUTED).pack(expand=True)
+            return
+
+        names = [c[0] for c in cands]
+        votes = [c[1] for c in cands]
+        colors = [CHART_COLORS[i % len(CHART_COLORS)] for i in range(len(names))]
+
+        fig = Figure(figsize=(11, 6), dpi=100, facecolor=PANEL)
+        ax1, ax2, ax3, ax4 = fig.subplots(2, 2).flatten()
+
+        def style(ax, title):
+            ax.set_facecolor(PANEL)
+            ax.set_title(title, color=ACCENT, fontsize=12, fontweight="bold", pad=10)
+            ax.tick_params(colors=TEXT, labelsize=9)
+            for spine in ax.spines.values():
+                spine.set_color(BORDER)
+
+        style(ax1, "Votes per Candidate")
+        ax1.bar(names, votes, color=colors)
+        ax1.set_ylabel("Votes", color=TEXT)
+        ax1.tick_params(axis="x", rotation=25)
+        ax1.yaxis.get_major_locator().set_params(integer=True)
+
+        style(ax2, "Vote Share")
+        with_votes = [(n, v, c) for n, v, c in zip(names, votes, colors) if v > 0]
+        _, _, autotexts = ax2.pie([x[1] for x in with_votes], labels=[x[0] for x in with_votes],
+                                  colors=[x[2] for x in with_votes], autopct="%1.1f%%", startangle=140,
+                                  textprops={"color": TEXT, "fontsize": 9}, wedgeprops={"edgecolor": PANEL})
+        for t in autotexts:
+            t.set_color("#1E1F22")
+        ax2.axis("equal")
+
+        style(ax3, "Voted by Gender")
+        g_names = [g[0] for g in genders]
+        g_counts = [g[1] for g in genders]
+        ax3.barh(g_names, g_counts, color=[CHART_COLORS[i + 1] for i in range(len(g_names))])
+        ax3.set_xlabel("Number of votes", color=TEXT)
+        ax3.xaxis.get_major_locator().set_params(integer=True)
+
+        style(ax4, "Turnout")
+        voted, not_voted = status.get(1, 0), status.get(0, 0)
+        ax4.pie([voted, not_voted], labels=["Voted", "Not Voted"], colors=["#4C9F70", "#5A5D66"],
+                autopct="%1.1f%%", startangle=90, textprops={"color": TEXT, "fontsize": 9},
+                wedgeprops={"edgecolor": PANEL})
+        ax4.axis("equal")
+
+        fig.tight_layout(pad=2.5)
+        frame = tk.Frame(body, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
+        frame.pack(fill="both", expand=True)
+        canvas = FigureCanvasTkAgg(fig, master=frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
 
 
-    
-
-if __name__ == '__main__':
-    root = Tk()
-    appobj = VotingAssistant(root)
-    root.mainloop()
-
-
-
-
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = VotingAssistant(root)
+    if app.failed:
+        root.destroy()
+    else:
+        root.mainloop()
